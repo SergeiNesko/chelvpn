@@ -99,6 +99,8 @@ jobs:
 
       - name: Copy Gradle wrapper from v2rayNG
         run: |
+          cp v2rayng/V2rayNG/gradlew \
+             custom/android/gradlew
           cp v2rayng/V2rayNG/gradle/wrapper/gradle-wrapper.jar \
              custom/android/gradle/wrapper/
           chmod +x custom/android/gradlew
