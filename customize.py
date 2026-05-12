@@ -57,9 +57,20 @@ def patch_build_gradle(app_id: str):
         if not os.path.exists(fname):
             continue
         print(f"[{fname}] applicationId → {app_id}")
-        replace_in_file(fname, f'"{ORIG_PACKAGE}"', f'"{app_id}"', expected=0)
-        replace_in_file(fname, f"'{ORIG_PACKAGE}'", f"'{app_id}'", expected=0)
-        print(f"  ✓ {fname} patched")
+        with open(fname, "r", encoding="utf-8") as f:
+            content = f.read()
+        # Only replace applicationId, leave namespace untouched (R class depends on it)
+        patched = re.sub(
+            r'(applicationId\s*[=:]\s*)["\']com\.v2ray\.ang["\']',
+            rf'\g<1>"{app_id}"',
+            content,
+        )
+        if patched == content:
+            print(f"  ⚠ applicationId not found in {fname}")
+        else:
+            with open(fname, "w", encoding="utf-8") as f:
+                f.write(patched)
+            print(f"  ✓ {fname} patched")
 
 
 def patch_manifest(scheme: str):
