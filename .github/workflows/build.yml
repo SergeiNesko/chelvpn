@@ -79,11 +79,15 @@ jobs:
 
       - name: Download libv2ray.aar
         run: |
-          mkdir -p v2rayng/V2rayNG/app/libs
-          wget -q \
-            https://github.com/2dust/AndroidLibXrayLite/releases/latest/download/libv2ray.aar \
-            -O v2rayng/V2rayNG/app/libs/libv2ray.aar
-          ls -lh v2rayng/V2rayNG/app/libs/
+          cd v2rayng/AndroidLibXrayLite
+          git fetch --tags --depth=1
+          XRAY_TAG=$(git describe --tags --abbrev=0)
+          echo "AndroidLibXrayLite version: $XRAY_TAG"
+          mkdir -p ../V2rayNG/app/libs
+          wget \
+            "https://github.com/2dust/AndroidLibXrayLite/releases/download/${XRAY_TAG}/libv2ray.aar" \
+            -O ../V2rayNG/app/libs/libv2ray.aar
+          ls -lh ../V2rayNG/app/libs/
 
       - name: Setup Java 21
         uses: actions/setup-java@v4
