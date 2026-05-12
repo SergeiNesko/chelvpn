@@ -117,9 +117,13 @@ class ChelVpnService : VpnService() {
     private fun startXray(configPath: String, configJson: String) {
         val libCls = Class.forName("libv2ray.Libv2ray")
 
-        // Находим newV2RayPoint динамически — имя интерфейса меняется между версиями aar
-        val newPointMethod = libCls.methods.firstOrNull { it.name == "newV2RayPoint" }
-            ?: throw NoSuchMethodException("newV2RayPoint не найден в libv2ray.Libv2ray")
+        // Находим метод-фабрику динамически (имя менялось между версиями aar)
+        val newPointMethod = libCls.methods.firstOrNull {
+            it.name == "newV2RayPoint" || it.name == "newVpoint" || it.name == "initV2Env"
+        } ?: run {
+            val available = libCls.methods.joinToString { it.name }
+            throw NoSuchMethodException("Методы Libv2ray: $available")
+        }
 
         // Тип первого параметра — это и есть нужный интерфейс (V2RayVpnServiceSupports или аналог)
         val supportIface = newPointMethod.parameterTypes[0]
