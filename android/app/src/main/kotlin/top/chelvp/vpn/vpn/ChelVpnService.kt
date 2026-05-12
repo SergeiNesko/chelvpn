@@ -116,7 +116,14 @@ class ChelVpnService : VpnService() {
 
     private fun startXray(configPath: String, configJson: String) {
         val libCls = Class.forName("libv2ray.Libv2ray")
-        val supportIface = Class.forName("libv2ray.V2RayVpnServiceSupports")
+
+        // Находим newV2RayPoint динамически — имя интерфейса меняется между версиями aar
+        val newPointMethod = libCls.methods.firstOrNull { it.name == "newV2RayPoint" }
+            ?: throw NoSuchMethodException("newV2RayPoint не найден в libv2ray.Libv2ray")
+
+        // Тип первого параметра — это и есть нужный интерфейс (V2RayVpnServiceSupports или аналог)
+        val supportIface = newPointMethod.parameterTypes[0]
+        Log.d(TAG, "supportIface: ${supportIface.name}")
 
         val proxy = Proxy.newProxyInstance(
             Thread.currentThread().contextClassLoader,
@@ -124,11 +131,10 @@ class ChelVpnService : VpnService() {
             XrayProtocol()
         )
 
-        val newPoint = libCls.getMethod("newV2RayPoint", supportIface, Boolean::class.java)
-        val point = newPoint.invoke(null, proxy, false)!!
+        val point = newPointMethod.invoke(null, proxy, false)!!
         v2rayPoint = point
 
-        // Try setConfigureFileContent first, fall back to setConfigureFile
+        // setConfigureFileContent принимает JSON-строку; setConfigureFile — путь к файлу
         runCatching {
             point.javaClass.getMethod("setConfigureFileContent", String::class.java)
                 .invoke(point, configJson)
