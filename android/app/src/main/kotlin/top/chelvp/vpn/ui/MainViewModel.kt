@@ -5,9 +5,12 @@ import android.content.Intent
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import top.chelvp.vpn.subscription.ServerConfig
 import top.chelvp.vpn.subscription.SingleInputResult
 import top.chelvp.vpn.subscription.SubscriptionManager
@@ -23,6 +26,8 @@ data class MainUiState(
     val statusColor: Color = Color(0xFF9E9E9E),
     val message: String = "",
     val activeServer: ServerConfig? = null,
+    val pingMs: Int = -1,
+    val lastError: String = "",
 )
 
 class MainViewModel : ViewModel() {
@@ -41,6 +46,7 @@ class MainViewModel : ViewModel() {
     private fun refreshState() {
         val server = prefs.activeServer
         val running = ChelVpnService.isRunning
+        val wasConnected = _uiState.value.isConnected
         _uiState.value = MainUiState(
             isConnected = running,
             isConnecting = false,
@@ -52,7 +58,11 @@ class MainViewModel : ViewModel() {
             },
             statusColor = if (running) Color(0xFF00C853) else Color(0xFF9E9E9E),
             activeServer = server,
+            lastError = ChelVpnService.lastError,
         )
+        if (running && !wasConnected) {
+            startPingMonitor()
+        }
     }
 
     // ── VPN control ───────────────────────────────────────────
@@ -62,11 +72,13 @@ class MainViewModel : ViewModel() {
             setMessage("Нет сервера. Добавьте подписку.")
             return
         }
+        ChelVpnService.lastError = ""
         _uiState.value = _uiState.value.copy(
             isConnecting = true,
             statusText = "Подключение...",
             statusColor = Color(0xFFFF8F00),
-            message = ""
+            message = "",
+            lastError = "",
         )
         val config = ConfigBuilder.build(server)
         val intent = Intent(context, ChelVpnService::class.java).apply {
@@ -74,10 +86,14 @@ class MainViewModel : ViewModel() {
             putExtra(ChelVpnService.EXTRA_CONFIG, config)
         }
         context.startForegroundService(intent)
-        // Через секунду обновляем статус
         viewModelScope.launch {
-            kotlinx.coroutines.delay(1500)
+            delay(2000)
             refreshState()
+            if (_uiState.value.isConnected) {
+                startPingMonitor()
+            } else if (ChelVpnService.lastError.isNotEmpty()) {
+                setMessage("Ошибка: ${ChelVpnService.lastError}")
+            }
         }
     }
 
@@ -88,9 +104,34 @@ class MainViewModel : ViewModel() {
             }
         )
         viewModelScope.launch {
-            kotlinx.coroutines.delay(500)
+            delay(500)
             refreshState()
         }
+    }
+
+    // ── Ping monitor ──────────────────────────────────────────
+
+    private fun startPingMonitor() {
+        viewModelScope.launch {
+            delay(2000) // дать VPN стабилизироваться
+            while (_uiState.value.isConnected) {
+                val ping = measurePing()
+                _uiState.value = _uiState.value.copy(pingMs = ping)
+                delay(10_000)
+            }
+            _uiState.value = _uiState.value.copy(pingMs = -1)
+        }
+    }
+
+    private suspend fun measurePing(): Int = withContext(Dispatchers.IO) {
+        try {
+            val start = System.currentTimeMillis()
+            java.net.Socket().use {
+                it.soTimeout = 5000
+                it.connect(java.net.InetSocketAddress("1.1.1.1", 443), 5000)
+            }
+            (System.currentTimeMillis() - start).toInt()
+        } catch (_: Exception) { -1 }
     }
 
     // ── Subscription / Import ─────────────────────────────────
@@ -125,6 +166,15 @@ class MainViewModel : ViewModel() {
             setMessage("Обновляю подписку...")
             fetchAndSave(url)
         }
+    }
+
+    fun resetConfig(context: Context) {
+        prefs = Prefs(context)
+        prefs.clearServers()
+        prefs.subscriptionUrl = ""
+        ChelVpnService.lastError = ""
+        refreshState()
+        setMessage("Конфигурация сброшена")
     }
 
     private suspend fun fetchAndSave(url: String) {

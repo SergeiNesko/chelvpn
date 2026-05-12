@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.chelvp.vpn.vpn.ChelVpnService
@@ -61,6 +62,7 @@ class MainActivity : ComponentActivity() {
                     state = state,
                     onConnectClick = { handleConnectClick() },
                     onUpdateSubClick = { vm.updateSubscription(this) },
+                    onResetClick = { vm.resetConfig(this) },
                     onPasteClick = { handlePaste() },
                     onQrClick = { qrLauncher.launch(Intent(this, QrScanActivity::class.java)) },
                 )
@@ -74,8 +76,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        // Deep link: v2rayng://install-config?url=SUB_URL
-        //        or: chelvpn://install-config?url=SUB_URL
         val uri = intent?.data ?: return
         if (uri.host == "install-config") {
             val url = uri.getQueryParameter("url") ?: return
@@ -110,6 +110,7 @@ fun MainScreen(
     state: MainUiState,
     onConnectClick: () -> Unit,
     onUpdateSubClick: () -> Unit,
+    onResetClick: () -> Unit,
     onPasteClick: () -> Unit,
     onQrClick: () -> Unit,
 ) {
@@ -125,10 +126,11 @@ fun MainScreen(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
-            modifier = Modifier.fillMaxSize().padding(24.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp)
         ) {
 
-            // Название
             Text(
                 "ChelVPN",
                 color = Color.White,
@@ -137,18 +139,27 @@ fun MainScreen(
                 letterSpacing = 2.sp
             )
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
 
-            // Статус
             Text(
                 state.statusText,
                 color = state.statusColor,
                 fontSize = 14.sp
             )
 
+            // Пинг — показываем только когда подключено
+            if (state.isConnected && state.pingMs > 0) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Пинг: ${state.pingMs} мс",
+                    color = pingColor(state.pingMs),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
             Spacer(Modifier.height(48.dp))
 
-            // Большая кнопка "ПОДКЛЮЧИТЬ"
             ConnectButton(
                 isConnected = state.isConnected,
                 isConnecting = state.isConnecting,
@@ -158,8 +169,8 @@ fun MainScreen(
 
             Spacer(Modifier.height(40.dp))
 
-            // Кнопка обновления подписки
             if (state.hasServer) {
+                // Обновить подписку
                 OutlinedButton(
                     onClick = onUpdateSubClick,
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
@@ -170,8 +181,17 @@ fun MainScreen(
                     Spacer(Modifier.width(8.dp))
                     Text("Обновить подписку", fontSize = 14.sp)
                 }
+
+                Spacer(Modifier.height(10.dp))
+
+                // Сбросить конфигурацию
+                TextButton(
+                    onClick = onResetClick,
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White.copy(alpha = 0.5f))
+                ) {
+                    Text("🗑 Сбросить конфигурацию", fontSize = 13.sp)
+                }
             } else {
-                // Нет сервера — кнопки импорта
                 Text("Добавьте подписку:", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -179,7 +199,7 @@ fun MainScreen(
                         onClick = onPasteClick,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
                         border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.4f))
-                    ) { Text("📋 Вставить URL") }
+                    ) { Text("📋 Вставить") }
                     OutlinedButton(
                         onClick = onQrClick,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
@@ -188,13 +208,31 @@ fun MainScreen(
                 }
             }
 
-            // Сообщение / ошибка
+            // Ошибка VPN (если есть)
+            if (state.lastError.isNotEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "⚠️ ${state.lastError}",
+                    color = Color(0xFFFF5252),
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Сообщение / статус
             if (state.message.isNotEmpty()) {
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(8.dp))
                 Text(state.message, color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
             }
         }
     }
+}
+
+private fun pingColor(ms: Int): Color = when {
+    ms < 100 -> Color(0xFF00C853)
+    ms < 250 -> Color(0xFFFFD600)
+    else     -> Color(0xFFFF5252)
 }
 
 @Composable

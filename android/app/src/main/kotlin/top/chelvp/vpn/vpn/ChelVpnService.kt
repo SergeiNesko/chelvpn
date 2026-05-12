@@ -26,6 +26,7 @@ class ChelVpnService : VpnService() {
         private const val NOTIF_ID = 1
 
         @Volatile var isRunning = false
+        @Volatile var lastError = ""
     }
 
     private var tunFd: ParcelFileDescriptor? = null
@@ -61,6 +62,7 @@ class ChelVpnService : VpnService() {
     // ── Start / Stop ──────────────────────────────────────────
 
     private fun start(xrayConfig: String) {
+        lastError = ""
         try {
             val configFile = File(filesDir, "config.json")
             configFile.writeText(xrayConfig)
@@ -69,16 +71,19 @@ class ChelVpnService : VpnService() {
 
             tunFd = buildTun()
             if (tunFd == null) {
-                Log.e(TAG, "Failed to establish VPN tunnel")
+                lastError = "Не удалось создать TUN-интерфейс (нет разрешения VPN?)"
+                Log.e(TAG, lastError)
                 stop()
                 return
             }
 
+            // hevStart блокирует поток — запускаем в отдельном потоке
             startHevTunnel(tunFd!!.fd)
 
             isRunning = true
             Log.i(TAG, "VPN started")
         } catch (e: Exception) {
+            lastError = "${e.javaClass.simpleName}: ${e.message?.take(120)}"
             Log.e(TAG, "Failed to start VPN", e)
             stop()
         }
@@ -154,13 +159,21 @@ class ChelVpnService : VpnService() {
 
     // ── hev-socks5-tunnel ────────────────────────────────────
 
+    private var hevThread: Thread? = null
+
     private fun startHevTunnel(fd: Int) {
         System.loadLibrary("hev-socks5-tunnel")
-        hevBridge.hevStart(buildHevConfig(), fd)
+        val cfg = buildHevConfig()
+        hevThread = Thread(null, {
+            try { hevBridge.hevStart(cfg, fd) }
+            catch (e: Exception) { Log.e(TAG, "hevStart error", e) }
+        }, "hev-tunnel").also { it.isDaemon = true; it.start() }
     }
 
     private fun stopHevTunnel() {
         runCatching { hevBridge.hevStop() }
+        hevThread?.interrupt()
+        hevThread = null
     }
 
     private fun buildHevConfig(): String = """

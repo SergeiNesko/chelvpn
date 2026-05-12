@@ -16,7 +16,8 @@ android {
         versionName = "1.0.0"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            // x86/x86_64 нужны только для эмулятора — убираем, чтобы уменьшить APK
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
     }
 
@@ -87,9 +88,6 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-
-    // DataStore для хранения настроек
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     // QR-сканер (MLKit + CameraX)
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
