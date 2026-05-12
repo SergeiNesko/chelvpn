@@ -158,7 +158,6 @@ def main():
     patch_strings(args.app_name)
     patch_build_gradle(args.app_id)
     patch_manifest(args.scheme)
-    patch_ui(args.app_name)
     resize_and_copy_icon(args.icon_src)
 
     print(f"\n✅ Customization complete → {args.app_name}")

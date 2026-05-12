@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - 'icon/**'
       - '**.md'
   workflow_dispatch:
     inputs:
@@ -130,8 +129,13 @@ jobs:
 
       - name: Collect APK
         run: |
-          APK=$(find v2rayng/V2rayNG/app/build/outputs/apk -name "*.apk" | head -1)
-          echo "Found APK: $APK"
+          echo "=== All APKs built ==="
+          find v2rayng/V2rayNG/app/build/outputs/apk -name "*.apk" -exec ls -lh {} \;
+          APK=$(find v2rayng/V2rayNG/app/build/outputs/apk -name "*universal*.apk" | head -1)
+          if [ -z "$APK" ]; then
+            APK=$(find v2rayng/V2rayNG/app/build/outputs/apk -name "*.apk" | head -1)
+          fi
+          echo "Using APK: $APK"
           cp "$APK" "ChelVPN_${{ env.V2RAYNG_VERSION }}.apk"
           rm -f keystore.jks
 
