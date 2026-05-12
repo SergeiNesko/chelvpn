@@ -117,9 +117,21 @@ class ChelVpnService : VpnService() {
     private fun startXray(configPath: String, configJson: String) {
         val libCls = Class.forName("libv2ray.Libv2ray")
 
+        // Newer libv2ray (2.x) requires initCoreEnv(assetPath, datDir) before newCoreController
+        libCls.methods.firstOrNull { it.name == "initCoreEnv" }?.let { initMethod ->
+            try {
+                val assetPath = filesDir.absolutePath
+                initMethod.invoke(null, assetPath, assetPath)
+                Log.d(TAG, "initCoreEnv OK")
+            } catch (e: Exception) {
+                Log.w(TAG, "initCoreEnv skipped: ${e.message}")
+            }
+        }
+
         // Находим метод-фабрику динамически (имя менялось между версиями aar)
         val newPointMethod = libCls.methods.firstOrNull {
-            it.name == "newV2RayPoint" || it.name == "newVpoint" || it.name == "initV2Env"
+            it.name == "newV2RayPoint" || it.name == "newVpoint" ||
+            it.name == "initV2Env" || it.name == "newCoreController"
         } ?: run {
             val available = libCls.methods.joinToString { it.name }
             throw NoSuchMethodException("Методы Libv2ray: $available")
@@ -127,7 +139,7 @@ class ChelVpnService : VpnService() {
 
         // Тип первого параметра — это и есть нужный интерфейс (V2RayVpnServiceSupports или аналог)
         val supportIface = newPointMethod.parameterTypes[0]
-        Log.d(TAG, "supportIface: ${supportIface.name}")
+        Log.d(TAG, "factory=${newPointMethod.name} iface=${supportIface.name}")
 
         val proxy = Proxy.newProxyInstance(
             Thread.currentThread().contextClassLoader,
@@ -135,7 +147,12 @@ class ChelVpnService : VpnService() {
             XrayProtocol()
         )
 
-        val point = newPointMethod.invoke(null, proxy, false)!!
+        // newCoreController(supports) — 1 param; newV2RayPoint(supports, useIPv6) — 2 params
+        val point = if (newPointMethod.parameterTypes.size == 1) {
+            newPointMethod.invoke(null, proxy)!!
+        } else {
+            newPointMethod.invoke(null, proxy, false)!!
+        }
         v2rayPoint = point
 
         // setConfigureFileContent принимает JSON-строку; setConfigureFile — путь к файлу
