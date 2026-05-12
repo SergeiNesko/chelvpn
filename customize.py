@@ -81,101 +81,151 @@ def patch_manifest(scheme: str):
     print(f"  ✓ AndroidManifest.xml patched")
 
 
-def patch_ui():
-    """Simplify UI: hide server list and tabs, center and enlarge the connect FAB."""
+def write_minimal_layout():
+    """Replace activity_main.xml with a minimal one-button layout.
+
+    Keeps all IDs referenced by MainActivity.kt but hides everything
+    except the toolbar (needed for menu/drawer toggle) and the centered FAB.
+    The subscription update is accessible via toolbar overflow menu or drawer.
+    """
     path = "app/src/main/res/layout/activity_main.xml"
     if not os.path.exists(path):
-        print(f"  ⚠ {path} not found, skipping UI patch")
+        print(f"  ⚠ {path} not found, skipping layout replacement")
         return
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
-    original = content
 
-    # 1. Hide TabLayout (server group tabs)
-    if 'android:id="@+id/tab_group"' in content:
-        content = re.sub(
-            r'(android:id="@\+id/tab_group")',
-            r'\1\n        android:visibility="gone"',
-            content, count=1,
-        )
-        print("  ✓ tab_group hidden")
-    else:
-        print("  ⚠ tab_group not found in layout")
+    minimal_layout = '''\
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/drawer_layout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
 
-    # 2. Hide ViewPager2 (server list)
-    if 'android:id="@+id/view_pager"' in content:
-        content = re.sub(
-            r'(android:id="@\+id/view_pager")',
-            r'\1\n        android:visibility="gone"',
-            content, count=1,
-        )
-        print("  ✓ view_pager hidden")
-    else:
-        print("  ⚠ view_pager not found in layout")
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fitsSystemWindows="true"
+        android:orientation="vertical">
 
-    # 3. Center FAB container FrameLayout: remove bottom|end + margins
-    # Flexible whitespace matching between attributes
-    new_content = re.sub(
-        r'android:layout_gravity="bottom\|end"\s*\n\s*android:layout_marginBottom="-16dp"\s*\n\s*android:layout_marginEnd="[^"]*">',
-        'android:layout_gravity="center">',
-        content, count=1,
-    )
-    if new_content != content:
-        content = new_content
-        print("  ✓ FAB container gravity → center")
-    else:
-        # Fallback: remove margins separately
-        new_content = re.sub(
-            r'android:layout_gravity="bottom\|end"(\s*\n\s*android:layout_marginBottom="[^"]*")?(\s*\n\s*android:layout_marginEnd="[^"]*")?>',
-            'android:layout_gravity="center">',
-            content, count=1,
-        )
-        if new_content != content:
-            content = new_content
-            print("  ✓ FAB container gravity → center (fallback)")
-        else:
-            print("  ⚠ FAB container bottom|end not matched")
+        <!-- Toolbar stays: needed for hamburger icon + overflow menu (sub_update) -->
+        <com.google.android.material.appbar.AppBarLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
 
-    # 4. Make FrameLayout match_parent so center gravity works
-    new_content = re.sub(
-        r'(<FrameLayout\s*\n\s*)android:layout_width="wrap_content"(\s*\n\s*)android:layout_height="wrap_content"(\s*\n\s*)android:layout_gravity="center"',
-        r'\1android:layout_width="match_parent"\2android:layout_height="match_parent"\3android:layout_gravity="center"',
-        content, count=1,
-    )
-    if new_content != content:
-        content = new_content
-        print("  ✓ FrameLayout → match_parent for centering")
-    else:
-        print("  ⚠ FrameLayout wrap_content + center not matched (may already be ok)")
+            <androidx.appcompat.widget.Toolbar
+                android:id="@+id/toolbar"
+                android:layout_width="match_parent"
+                android:layout_height="?attr/actionBarSize" />
 
-    # 5. Center FAB itself: remove bottom|end + marginBottom from the FAB element
-    new_content = re.sub(
-        r'android:layout_gravity="bottom\|end"\s*\n\s*android:layout_marginBottom="[^"]*"',
-        'android:layout_gravity="center"',
-        content, count=1,
-    )
-    if new_content != content:
-        content = new_content
-        print("  ✓ FAB gravity → center")
-    else:
-        print("  ⚠ FAB bottom|end + marginBottom not matched")
+        </com.google.android.material.appbar.AppBarLayout>
 
-    # 6. Remove anchorGravity (not needed when FAB is centered)
-    new_content = re.sub(
-        r'\s*\n\s*app:layout_anchorGravity="[^"]*"',
-        '',
-        content, count=1,
-    )
-    if new_content != content:
-        content = new_content
-        print("  ✓ FAB anchorGravity removed")
+        <!-- Full-screen area for centered FAB + hidden IDs kept for code compatibility -->
+        <androidx.coordinatorlayout.widget.CoordinatorLayout
+            android:id="@+id/main_content"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
 
-    if content != original:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        print("  ✓ activity_main.xml saved")
-    else:
-        print("  ⚠ UI patch: no changes applied to activity_main.xml")
+            <!-- Hidden views: IDs required by MainActivity but not shown to user -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <com.google.android.material.progressindicator.LinearProgressIndicator
+                    android:id="@+id/progress_bar"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:indeterminate="true"
+                    android:visibility="invisible"
+                    app:indicatorColor="@color/color_fab_active" />
+
+                <com.google.android.material.tabs.TabLayout
+                    android:id="@+id/tab_group"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    app:tabIndicatorFullWidth="false"
+                    app:tabMode="scrollable"
+                    app:tabTextAppearance="@style/TabLayoutTextStyle" />
+
+                <androidx.viewpager2.widget.ViewPager2
+                    android:id="@+id/view_pager"
+                    android:layout_width="match_parent"
+                    android:layout_height="200dp"
+                    android:nextFocusRight="@+id/fab"
+                    android:scrollbars="vertical" />
+
+                <LinearLayout
+                    android:id="@+id/layout_test"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/view_height_dp64"
+                    android:clickable="true"
+                    android:contentDescription="@string/connection_test_pending"
+                    android:focusable="true"
+                    android:nextFocusLeft="@+id/view_pager"
+                    android:nextFocusRight="@+id/fab"
+                    android:orientation="vertical">
+
+                    <View
+                        android:layout_width="wrap_content"
+                        android:layout_height="1dp"
+                        android:background="@color/divider_color_light" />
+
+                    <TextView
+                        android:id="@+id/tv_test_state"
+                        android:layout_width="wrap_content"
+                        android:layout_height="match_parent"
+                        android:gravity="start|center"
+                        android:maxLines="2"
+                        android:minLines="1"
+                        android:paddingStart="@dimen/padding_spacing_dp16"
+                        android:text="@string/connection_test_pending"
+                        android:textAppearance="@style/TextAppearance.AppCompat.Small" />
+
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Single centered connect button -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_gravity="center">
+
+                <com.google.android.material.floatingactionbutton.FloatingActionButton
+                    android:id="@+id/fab"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:clickable="true"
+                    android:contentDescription="@string/tasker_start_service"
+                    android:focusable="true"
+                    android:nextFocusLeft="@+id/layout_test"
+                    android:src="@drawable/ic_play_24dp"
+                    app:tint="@color/colorWhite"
+                    app:useCompatPadding="true" />
+
+            </FrameLayout>
+
+        </androidx.coordinatorlayout.widget.CoordinatorLayout>
+    </LinearLayout>
+
+    <!-- Navigation drawer: settings + subscription access via swipe from left -->
+    <com.google.android.material.navigation.NavigationView
+        android:id="@+id/nav_view"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        app:headerLayout="@layout/nav_header"
+        app:menu="@menu/menu_drawer">
+
+    </com.google.android.material.navigation.NavigationView>
+
+</androidx.drawerlayout.widget.DrawerLayout>
+'''
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(minimal_layout)
+    print("  ✓ activity_main.xml replaced with minimal one-button layout")
 
 
 def patch_menu_sub_update():
@@ -262,7 +312,7 @@ def main():
     patch_strings(args.app_name)
     patch_build_gradle(args.app_id)
     patch_manifest(args.scheme)
-    patch_ui()
+    write_minimal_layout()
     patch_menu_sub_update()
     resize_and_copy_icon(args.icon_src)
 
