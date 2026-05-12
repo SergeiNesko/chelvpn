@@ -24,7 +24,7 @@ def patch_strings(app_name: str):
     with open(path, "r", encoding="utf-8") as f:
         raw = f.read()
     patched = re.sub(
-        r'(<string name="app_name">)[^<]*(</string>)',
+        r'(<string name="app_name"[^>]*>)[^<]*(</string>)',
         rf'\g<1>{app_name}\g<2>',
         raw,
     )

@@ -105,12 +105,14 @@ jobs:
 
       - name: Apply ChelVPN customizations
         run: |
+          ICON=$(find custom/icon -name '*.png' | head -1)
+          echo "Icon: $ICON"
           cd v2rayng/V2rayNG
           python3 ../../custom/customize.py \
             --app-name "${{ env.APP_NAME }}" \
             --app-id "${{ env.APP_ID }}" \
             --scheme "${{ env.DEEP_LINK_SCHEME }}" \
-            --icon-src "../../custom/icon/ic_launcher.png"
+            --icon-src "../../$ICON"
 
       - name: Decode keystore
         run: |
