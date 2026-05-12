@@ -160,25 +160,15 @@ def patch_ui():
     else:
         print("  ⚠ FAB bottom|end + marginBottom not matched")
 
-    # 6. Enlarge FAB and remove anchor gravity
+    # 6. Remove anchorGravity (not needed when FAB is centered)
     new_content = re.sub(
-        r'(app:useCompatPadding="true")\s*\n\s*app:layout_anchorGravity="[^"]*"',
-        r'app:fabSize="large"\n                        \1',
+        r'\s*\n\s*app:layout_anchorGravity="[^"]*"',
+        '',
         content, count=1,
     )
     if new_content != content:
         content = new_content
-        print("  ✓ FAB enlarged (fabSize=large), anchorGravity removed")
-    else:
-        print("  ⚠ useCompatPadding + anchorGravity not matched, trying to just add fabSize")
-        new_content = re.sub(
-            r'(app:useCompatPadding="true")',
-            r'app:fabSize="large"\n                        \1',
-            content, count=1,
-        )
-        if new_content != content:
-            content = new_content
-            print("  ✓ FAB enlarged (fabSize=large added)")
+        print("  ✓ FAB anchorGravity removed")
 
     if content != original:
         with open(path, "w", encoding="utf-8") as f:
