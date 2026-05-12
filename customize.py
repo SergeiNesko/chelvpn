@@ -13,33 +13,14 @@ import argparse
 import os
 import re
 import shutil
-import sys
 
 ORIG_PACKAGE = "com.v2ray.ang"
 ORIG_SCHEME = "v2rayng"
 
 
-def replace_in_file(path: str, old: str, new: str, expected: int = 1) -> bool:
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        content = f.read()
-    count = content.count(old)
-    if count == 0:
-        print(f"  ⚠ [{path}] pattern not found: {repr(old[:60])}")
-        return False
-    if expected and count != expected:
-        print(f"  ⚠ [{path}] found {count} occurrences (expected {expected}), patching all")
-    patched = content.replace(old, new)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(patched)
-    return True
-
-
 def patch_strings(app_name: str):
     path = "app/src/main/res/values/strings.xml"
     print(f"[strings.xml] app_name → {app_name}")
-    replace_in_file(path, ">v2rayNG<", f">{app_name}<", expected=0)
-    replace_in_file(path, ">v2rayng<", f">{app_name}<", expected=0)
-    # Fallback: any remaining app_name value
     with open(path, "r", encoding="utf-8") as f:
         raw = f.read()
     patched = re.sub(
@@ -59,7 +40,7 @@ def patch_build_gradle(app_id: str):
         print(f"[{fname}] applicationId → {app_id}")
         with open(fname, "r", encoding="utf-8") as f:
             content = f.read()
-        # Only replace applicationId, leave namespace untouched (R class depends on it)
+        # Only replace applicationId line, leave namespace untouched
         patched = re.sub(
             r'(applicationId\s*[=:]\s*)["\']com\.v2ray\.ang["\']',
             rf'\g<1>"{app_id}"',
@@ -79,15 +60,10 @@ def patch_manifest(scheme: str):
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Find the existing v2rayng:// intent-filter block and duplicate with new scheme
-    old_scheme_tag = f'android:scheme="{ORIG_SCHEME}"'
-    new_scheme_tag = f'android:scheme="{scheme}"'
-
-    if new_scheme_tag in content:
+    if f'android:scheme="{scheme}"' in content:
         print(f"  ⚠ scheme {scheme}:// already present, skipping")
         return
 
-    # Insert new data tag alongside existing scheme
     patched = content.replace(
         f'<data android:scheme="{ORIG_SCHEME}" />',
         f'<data android:scheme="{ORIG_SCHEME}" />\n'
@@ -95,7 +71,6 @@ def patch_manifest(scheme: str):
         1,
     )
     if patched == content:
-        # Try alternate format without self-closing slash
         patched = content.replace(
             f'android:scheme="{ORIG_SCHEME}"',
             f'android:scheme="{ORIG_SCHEME}"\n'
@@ -108,44 +83,30 @@ def patch_manifest(scheme: str):
     print(f"  ✓ AndroidManifest.xml patched")
 
 
-def patch_scheme_handler(scheme: str):
-    """Add 'chelvpn' to the URI scheme check in Kotlin source."""
-    kt_files = []
-    for root, _, files in os.walk("app/src/main/kotlin"):
-        for f in files:
-            if f.endswith(".kt"):
-                kt_files.append(os.path.join(root, f))
-
-    patched_any = False
-    for path in kt_files:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-        # Look for scheme comparison like: == "v2rayng" or startsWith("v2rayng")
-        if f'"{ORIG_SCHEME}"' not in content:
+def patch_ui(app_name: str):
+    """Simplify UI: one connect button, hide clutter."""
+    # Hide FAB (add server button) in main layout
+    for layout_path in [
+        "app/src/main/res/layout/activity_main.xml",
+        "app/src/main/res/layout/fragment_main.xml",
+    ]:
+        if not os.path.exists(layout_path):
             continue
-        # Patch equality check: uri.scheme == "v2rayng" → uri.scheme in listOf(...)
+        with open(layout_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        # Hide FloatingActionButton
         patched = re.sub(
-            rf'(\.scheme\s*==\s*)"{re.escape(ORIG_SCHEME)}"',
-            rf'\g<1>"{ORIG_SCHEME}" || uri.scheme == "{scheme}"',
+            r'(<com\.google\.android\.material\.floatingactionbutton\.FloatingActionButton\b[^>]*?)(?<!android:visibility="gone")(\s*/>|\s*>)',
+            lambda m: m.group(0).replace(m.group(2), f'\n        android:visibility="gone"{m.group(2)}')
+            if 'visibility' not in m.group(0) else m.group(0),
             content,
         )
-        # Patch when-expression: "v2rayng" -> { → "v2rayng", "{scheme}" -> {
-        patched = re.sub(
-            rf'"{re.escape(ORIG_SCHEME)}"\s*->',
-            rf'"{ORIG_SCHEME}", "{scheme}" ->',
-            patched,
-        )
         if patched != content:
-            with open(path, "w", encoding="utf-8") as f:
+            with open(layout_path, "w", encoding="utf-8") as f:
                 f.write(patched)
-            rel = os.path.relpath(path)
-            print(f"  ✓ scheme handler patched in {rel}")
-            patched_any = True
-
-    if not patched_any:
-        print(f"  ⚠ scheme handler not found in Kotlin sources — {scheme}:// intent will open app but URL parsing may fall back to v2rayng:// handler")
-    else:
-        print(f"[Kotlin] scheme {scheme}:// handler added")
+            print(f"  ✓ FAB hidden in {layout_path}")
+        else:
+            print(f"  ~ FAB not found or already hidden in {layout_path}")
 
 
 def resize_and_copy_icon(icon_src: str):
@@ -154,7 +115,7 @@ def resize_and_copy_icon(icon_src: str):
         return
 
     try:
-        from PIL import Image
+        from PIL import Image, ImageDraw
     except ImportError:
         print("[icon] Pillow not installed — keeping original icons")
         return
@@ -173,8 +134,6 @@ def resize_and_copy_icon(icon_src: str):
         os.makedirs(dst_dir, exist_ok=True)
         resized = img.resize((size, size), Image.LANCZOS)
         resized.save(f"{dst_dir}/ic_launcher.png")
-        # Round icon: circle crop
-        from PIL import ImageDraw
         mask = Image.new("L", (size, size), 0)
         draw = ImageDraw.Draw(mask)
         draw.ellipse((0, 0, size, size), fill=255)
@@ -199,7 +158,7 @@ def main():
     patch_strings(args.app_name)
     patch_build_gradle(args.app_id)
     patch_manifest(args.scheme)
-    patch_scheme_handler(args.scheme)
+    patch_ui(args.app_name)
     resize_and_copy_icon(args.icon_src)
 
     print(f"\n✅ Customization complete → {args.app_name}")
