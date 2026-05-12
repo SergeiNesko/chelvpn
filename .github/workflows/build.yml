@@ -52,16 +52,16 @@ jobs:
 
       - name: Apply ChelVPN customizations
         run: |
-          cd v2rayng
-          python3 ../custom/customize.py \
+          cd v2rayng/V2rayNG
+          python3 ../../custom/customize.py \
             --app-name "${{ env.APP_NAME }}" \
             --app-id "${{ env.APP_ID }}" \
             --scheme "${{ env.DEEP_LINK_SCHEME }}" \
-            --icon-src "../custom/icon/ic_launcher.png"
+            --icon-src "../../custom/icon/ic_launcher.png"
 
       - name: Build Release APK
         run: |
-          cd v2rayng
+          cd v2rayng/V2rayNG
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
 
@@ -69,7 +69,7 @@ jobs:
         uses: r0adkll/sign-android-release@v1
         id: sign_app
         with:
-          releaseDirectory: v2rayng/app/build/outputs/apk/release
+          releaseDirectory: v2rayng/V2rayNG/app/build/outputs/apk/release
           signingKeyBase64: ${{ secrets.SIGNING_KEY }}
           alias: ${{ secrets.KEY_ALIAS }}
           keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
