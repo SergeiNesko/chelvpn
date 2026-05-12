@@ -18,6 +18,7 @@ env:
   APP_NAME: ChelVPN
   APP_ID: top.chelvp.vpn
   DEEP_LINK_SCHEME: chelvpn
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
