@@ -1,0 +1,103 @@
+name: Build ChelVPN APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'icon/**'
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      v2rayng_version:
+        description: 'v2rayNG version tag (e.g. 2.1.7)'
+        required: false
+        default: '2.1.7'
+
+env:
+  V2RAYNG_VERSION: ${{ github.event.inputs.v2rayng_version || '2.1.7' }}
+  APP_NAME: ChelVPN
+  APP_ID: top.chelvp.vpn
+  DEEP_LINK_SCHEME: chelvpn
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout customization repo
+        uses: actions/checkout@v4
+        with:
+          path: custom
+
+      - name: Clone v2rayNG source
+        run: |
+          git clone --depth=1 --branch ${{ env.V2RAYNG_VERSION }} \
+            https://github.com/2dust/v2rayNG.git v2rayng
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Pillow for icon resizing
+        run: pip install Pillow
+
+      - name: Apply ChelVPN customizations
+        run: |
+          cd v2rayng
+          python3 ../custom/customize.py \
+            --app-name "${{ env.APP_NAME }}" \
+            --app-id "${{ env.APP_ID }}" \
+            --scheme "${{ env.DEEP_LINK_SCHEME }}" \
+            --icon-src "../custom/icon/ic_launcher.png"
+
+      - name: Build Release APK
+        run: |
+          cd v2rayng
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Sign APK
+        uses: r0adkll/sign-android-release@v1
+        id: sign_app
+        with:
+          releaseDirectory: v2rayng/app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Rename signed APK
+        run: |
+          mv "${{ steps.sign_app.outputs.signedReleaseFile }}" \
+             "ChelVPN_${{ env.V2RAYNG_VERSION }}.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChelVPN_${{ env.V2RAYNG_VERSION }}
+          path: ChelVPN_${{ env.V2RAYNG_VERSION }}.apk
+          retention-days: 30
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push'
+        with:
+          tag_name: v${{ env.V2RAYNG_VERSION }}-chelvpn
+          name: ChelVPN ${{ env.V2RAYNG_VERSION }}
+          body: |
+            Автоматическая сборка ChelVPN на базе v2rayNG ${{ env.V2RAYNG_VERSION }}
+
+            **Установка:**
+            1. Скачай APK ниже
+            2. Разреши установку из неизвестных источников
+            3. Установи и получи ключ в боте @VpnChelyaba_Bot
+          files: ChelVPN_${{ env.V2RAYNG_VERSION }}.apk
+          make_latest: true
