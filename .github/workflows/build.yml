@@ -67,25 +67,21 @@ jobs:
       - name: Rebuild APK
         run: apktool b decoded -o ChelVPN_unsigned.apk
 
-      - name: Prepare signing directory
-        run: |
-          mkdir -p to_sign
-          cp ChelVPN_unsigned.apk to_sign/
-
       - name: Sign APK
-        uses: r0adkll/sign-android-release@v1
-        id: sign_app
-        with:
-          releaseDirectory: to_sign
-          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
-          alias: ${{ secrets.KEY_ALIAS }}
-          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
-          keyPassword: ${{ secrets.KEY_PASSWORD }}
-
-      - name: Rename signed APK
         run: |
-          mv "${{ steps.sign_app.outputs.signedReleaseFile }}" \
-             "ChelVPN_${{ env.V2RAYNG_VERSION }}.apk"
+          echo "${{ secrets.SIGNING_KEY }}" | base64 -d > keystore.jks
+          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools/" | sort -V | tail -1)
+          echo "Using build-tools: $BUILD_TOOLS"
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/zipalign" -v 4 \
+            ChelVPN_unsigned.apk ChelVPN_aligned.apk
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
+            --ks keystore.jks \
+            --ks-pass "pass:${{ secrets.KEY_STORE_PASSWORD }}" \
+            --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
+            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+            --out "ChelVPN_${{ env.V2RAYNG_VERSION }}.apk" \
+            ChelVPN_aligned.apk
+          rm keystore.jks
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
