@@ -114,6 +114,14 @@ jobs:
             --scheme "${{ env.DEEP_LINK_SCHEME }}" \
             --icon-src "../../$ICON"
 
+      - name: Debug patched layout
+        run: |
+          echo "=== activity_main.xml (FAB area) ==="
+          grep -n "layout_gravity\|layout_width\|layout_height\|fab\|FrameLayout\|visibility\|fabSize\|anchorGravity" \
+            v2rayng/V2rayNG/app/src/main/res/layout/activity_main.xml | head -40
+          echo "=== menu_main.xml (sub_update) ==="
+          grep -A3 "sub_update" v2rayng/V2rayNG/app/src/main/res/menu/menu_main.xml
+
       - name: Decode keystore
         run: |
           echo "${{ secrets.SIGNING_KEY }}" | base64 -d > keystore.jks

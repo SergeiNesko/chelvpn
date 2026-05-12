@@ -12,7 +12,6 @@ Usage:
 import argparse
 import os
 import re
-import shutil
 
 ORIG_PACKAGE = "com.v2ray.ang"
 ORIG_SCHEME = "v2rayng"
@@ -40,7 +39,6 @@ def patch_build_gradle(app_id: str):
         print(f"[{fname}] applicationId → {app_id}")
         with open(fname, "r", encoding="utf-8") as f:
             content = f.read()
-        # Only replace applicationId line, leave namespace untouched
         patched = re.sub(
             r'(applicationId\s*[=:]\s*)["\']com\.v2ray\.ang["\']',
             rf'\g<1>"{app_id}"',
@@ -71,11 +69,11 @@ def patch_manifest(scheme: str):
         1,
     )
     if patched == content:
-        patched = content.replace(
-            f'android:scheme="{ORIG_SCHEME}"',
-            f'android:scheme="{ORIG_SCHEME}"\n'
-            f'            /><data android:scheme="{scheme}"',
-            1,
+        patched = re.sub(
+            rf'(android:scheme="{ORIG_SCHEME}")',
+            rf'\1 />\n                    <data android:scheme="{scheme}"',
+            content,
+            count=1,
         )
 
     with open(path, "w", encoding="utf-8") as f:
@@ -84,59 +82,145 @@ def patch_manifest(scheme: str):
 
 
 def patch_ui():
-    """Simplify UI: hide server list and tabs, center the connect FAB."""
+    """Simplify UI: hide server list and tabs, center and enlarge the connect FAB."""
     path = "app/src/main/res/layout/activity_main.xml"
     if not os.path.exists(path):
         print(f"  ⚠ {path} not found, skipping UI patch")
         return
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
-
     original = content
 
     # 1. Hide TabLayout (server group tabs)
-    content = re.sub(
-        r'(android:id="@\+id/tab_group")',
-        r'\1\n        android:visibility="gone"',
-        content, count=1,
-    )
+    if 'android:id="@+id/tab_group"' in content:
+        content = re.sub(
+            r'(android:id="@\+id/tab_group")',
+            r'\1\n        android:visibility="gone"',
+            content, count=1,
+        )
+        print("  ✓ tab_group hidden")
+    else:
+        print("  ⚠ tab_group not found in layout")
 
     # 2. Hide ViewPager2 (server list)
-    content = re.sub(
-        r'(android:id="@\+id/view_pager")',
-        r'\1\n                    android:visibility="gone"',
+    if 'android:id="@+id/view_pager"' in content:
+        content = re.sub(
+            r'(android:id="@\+id/view_pager")',
+            r'\1\n        android:visibility="gone"',
+            content, count=1,
+        )
+        print("  ✓ view_pager hidden")
+    else:
+        print("  ⚠ view_pager not found in layout")
+
+    # 3. Center FAB container FrameLayout: remove bottom|end + margins
+    # Flexible whitespace matching between attributes
+    new_content = re.sub(
+        r'android:layout_gravity="bottom\|end"\s*\n\s*android:layout_marginBottom="-16dp"\s*\n\s*android:layout_marginEnd="[^"]*">',
+        'android:layout_gravity="center">',
         content, count=1,
     )
+    if new_content != content:
+        content = new_content
+        print("  ✓ FAB container gravity → center")
+    else:
+        # Fallback: remove margins separately
+        new_content = re.sub(
+            r'android:layout_gravity="bottom\|end"(\s*\n\s*android:layout_marginBottom="[^"]*")?(\s*\n\s*android:layout_marginEnd="[^"]*")?>',
+            'android:layout_gravity="center">',
+            content, count=1,
+        )
+        if new_content != content:
+            content = new_content
+            print("  ✓ FAB container gravity → center (fallback)")
+        else:
+            print("  ⚠ FAB container bottom|end not matched")
 
-    # 3. Center FAB FrameLayout and enlarge FAB
-    content = content.replace(
-        'android:layout_gravity="bottom|end"\n                    android:layout_marginBottom="-16dp"\n                    android:layout_marginEnd="@dimen/padding_spacing_dp16">',
-        'android:layout_gravity="center">',
-        1,
+    # 4. Make FrameLayout match_parent so center gravity works
+    new_content = re.sub(
+        r'(<FrameLayout\s*\n\s*)android:layout_width="wrap_content"(\s*\n\s*)android:layout_height="wrap_content"(\s*\n\s*)android:layout_gravity="center"',
+        r'\1android:layout_width="match_parent"\2android:layout_height="match_parent"\3android:layout_gravity="center"',
+        content, count=1,
     )
-    content = content.replace(
-        'android:layout_gravity="bottom|end"\n                        android:layout_marginBottom="@dimen/view_height_dp36"',
+    if new_content != content:
+        content = new_content
+        print("  ✓ FrameLayout → match_parent for centering")
+    else:
+        print("  ⚠ FrameLayout wrap_content + center not matched (may already be ok)")
+
+    # 5. Center FAB itself: remove bottom|end + marginBottom from the FAB element
+    new_content = re.sub(
+        r'android:layout_gravity="bottom\|end"\s*\n\s*android:layout_marginBottom="[^"]*"',
         'android:layout_gravity="center"',
-        1,
+        content, count=1,
     )
-    content = content.replace(
-        'app:useCompatPadding="true"\n                        app:layout_anchorGravity="bottom|right|end"',
-        'app:fabSize="large"\n                        app:useCompatPadding="true"',
-        1,
+    if new_content != content:
+        content = new_content
+        print("  ✓ FAB gravity → center")
+    else:
+        print("  ⚠ FAB bottom|end + marginBottom not matched")
+
+    # 6. Enlarge FAB and remove anchor gravity
+    new_content = re.sub(
+        r'(app:useCompatPadding="true")\s*\n\s*app:layout_anchorGravity="[^"]*"',
+        r'app:fabSize="large"\n                        \1',
+        content, count=1,
     )
-    # Change FAB FrameLayout to full size so center gravity works
-    content = content.replace(
-        '<FrameLayout\n                    android:layout_width="wrap_content"\n                    android:layout_height="wrap_content"\n                    android:layout_gravity="center">',
-        '<FrameLayout\n                    android:layout_width="match_parent"\n                    android:layout_height="match_parent"\n                    android:layout_gravity="center">',
-        1,
-    )
+    if new_content != content:
+        content = new_content
+        print("  ✓ FAB enlarged (fabSize=large), anchorGravity removed")
+    else:
+        print("  ⚠ useCompatPadding + anchorGravity not matched, trying to just add fabSize")
+        new_content = re.sub(
+            r'(app:useCompatPadding="true")',
+            r'app:fabSize="large"\n                        \1',
+            content, count=1,
+        )
+        if new_content != content:
+            content = new_content
+            print("  ✓ FAB enlarged (fabSize=large added)")
 
     if content != original:
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-        print(f"  ✓ UI simplified: server list hidden, FAB centered and enlarged")
+        print("  ✓ activity_main.xml saved")
     else:
-        print(f"  ⚠ UI patch: no changes made (layout structure may differ)")
+        print("  ⚠ UI patch: no changes applied to activity_main.xml")
+
+
+def patch_menu_sub_update():
+    """Make subscription update button always visible in toolbar (not hidden in overflow)."""
+    path = "app/src/main/res/menu/menu_main.xml"
+    if not os.path.exists(path):
+        print(f"  ⚠ {path} not found, skipping menu patch")
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Exact match for v2rayNG 2.1.7 menu_main.xml
+    patched = content.replace(
+        '        android:id="@+id/sub_update"\n'
+        '        android:title="@string/title_sub_update"\n'
+        '        app:showAsAction="never" />',
+        '        android:id="@+id/sub_update"\n'
+        '        android:icon="@drawable/ic_subscriptions_24dp"\n'
+        '        android:title="@string/title_sub_update"\n'
+        '        app:showAsAction="always" />',
+    )
+    if patched == content:
+        # Regex fallback
+        patched = re.sub(
+            r'(android:id="@\+id/sub_update"[\s\S]*?)app:showAsAction="never"(\s*/>)',
+            r'\1android:icon="@drawable/ic_subscriptions_24dp"\n        app:showAsAction="always"\2',
+            content,
+            count=1,
+        )
+    if patched == content:
+        print("  ⚠ sub_update menu item not found")
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(patched)
+    print("  ✓ sub_update button: always visible in toolbar")
 
 
 def resize_and_copy_icon(icon_src: str):
@@ -189,6 +273,7 @@ def main():
     patch_build_gradle(args.app_id)
     patch_manifest(args.scheme)
     patch_ui()
+    patch_menu_sub_update()
     resize_and_copy_icon(args.icon_src)
 
     print(f"\n✅ Customization complete → {args.app_name}")
