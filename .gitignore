@@ -1,0 +1,27 @@
+# Gradle build outputs
+android/.gradle/
+android/app/build/
+android/build/
+
+# Local properties (auto-generated in CI)
+android/local.properties
+
+# Android native libs and aar (copied in CI from v2rayNG)
+android/app/src/main/jniLibs/
+android/app/libs/
+
+# Gradle wrapper jar (copied in CI from v2rayNG)
+android/gradle/wrapper/gradle-wrapper.jar
+
+# Keystore
+*.jks
+*.keystore
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+*.iml
+.vscode/

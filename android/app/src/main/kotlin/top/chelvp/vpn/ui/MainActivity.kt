@@ -1,0 +1,274 @@
+package top.chelvp.vpn.ui
+
+import android.app.Activity
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.VpnService
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import top.chelvp.vpn.vpn.ChelVpnService
+
+class MainActivity : ComponentActivity() {
+
+    private val vm: MainViewModel by viewModels()
+
+    private val vpnPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) vm.startVpn(this)
+    }
+
+    private val qrLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uri = result.data?.getStringExtra(QrScanActivity.EXTRA_RESULT) ?: return@registerForActivityResult
+            vm.handleImportInput(this, uri)
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        vm.init(this)
+        handleIntent(intent)
+
+        setContent {
+            ChelVpnTheme {
+                val state by vm.uiState.collectAsState()
+                MainScreen(
+                    state = state,
+                    onConnectClick = { handleConnectClick() },
+                    onUpdateSubClick = { vm.updateSubscription(this) },
+                    onPasteClick = { handlePaste() },
+                    onQrClick = { qrLauncher.launch(Intent(this, QrScanActivity::class.java)) },
+                )
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        // Deep link: v2rayng://install-config?url=SUB_URL
+        //        or: chelvpn://install-config?url=SUB_URL
+        val uri = intent?.data ?: return
+        if (uri.host == "install-config") {
+            val url = uri.getQueryParameter("url") ?: return
+            vm.handleImportInput(this, url)
+        }
+    }
+
+    private fun handleConnectClick() {
+        if (ChelVpnService.isRunning) {
+            vm.stopVpn(this)
+        } else {
+            val vpnIntent = VpnService.prepare(this)
+            if (vpnIntent != null) {
+                vpnPermissionLauncher.launch(vpnIntent)
+            } else {
+                vm.startVpn(this)
+            }
+        }
+    }
+
+    private fun handlePaste() {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val text = cm.primaryClip?.getItemAt(0)?.text?.toString() ?: return
+        vm.handleImportInput(this, text)
+    }
+}
+
+// ─── Screen ─────────────────────────────────────────────────────────────────
+
+@Composable
+fun MainScreen(
+    state: MainUiState,
+    onConnectClick: () -> Unit,
+    onUpdateSubClick: () -> Unit,
+    onPasteClick: () -> Unit,
+    onQrClick: () -> Unit,
+) {
+    val bgTop = Color(0xFF0D1B2A)
+    val bgBot = Color(0xFF1B2838)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(bgTop, bgBot))),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxSize().padding(24.dp)
+        ) {
+
+            // Название
+            Text(
+                "ChelVPN",
+                color = Color.White,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 2.sp
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            // Статус
+            Text(
+                state.statusText,
+                color = state.statusColor,
+                fontSize = 14.sp
+            )
+
+            Spacer(Modifier.height(48.dp))
+
+            // Большая кнопка "ПОДКЛЮЧИТЬ"
+            ConnectButton(
+                isConnected = state.isConnected,
+                isConnecting = state.isConnecting,
+                enabled = !state.isConnecting && state.hasServer,
+                onClick = onConnectClick
+            )
+
+            Spacer(Modifier.height(40.dp))
+
+            // Кнопка обновления подписки
+            if (state.hasServer) {
+                OutlinedButton(
+                    onClick = onUpdateSubClick,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
+                    modifier = Modifier.height(44.dp)
+                ) {
+                    Icon(Icons.Default.Refresh, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Обновить подписку", fontSize = 14.sp)
+                }
+            } else {
+                // Нет сервера — кнопки импорта
+                Text("Добавьте подписку:", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(
+                        onClick = onPasteClick,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.4f))
+                    ) { Text("📋 Вставить URL") }
+                    OutlinedButton(
+                        onClick = onQrClick,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.4f))
+                    ) { Text("📷 QR-код") }
+                }
+            }
+
+            // Сообщение / ошибка
+            if (state.message.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                Text(state.message, color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun ConnectButton(
+    isConnected: Boolean,
+    isConnecting: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val pulseAnim = rememberInfiniteTransition(label = "pulse")
+    val scale by pulseAnim.animateFloat(
+        initialValue = 1f,
+        targetValue = if (isConnecting) 1.06f else 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "scale"
+    )
+
+    val btnColor by animateColorAsState(
+        targetValue = when {
+            isConnected  -> Color(0xFF00C853)
+            isConnecting -> Color(0xFFFF8F00)
+            else         -> Color(0xFF1565C0)
+        },
+        animationSpec = tween(400),
+        label = "btnColor"
+    )
+
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(containerColor = btnColor),
+        elevation = ButtonDefaults.buttonElevation(defaultElevation = 12.dp),
+        modifier = Modifier
+            .size(180.dp)
+            .scale(scale),
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Default.PowerSettingsNew,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(48.dp)
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = when {
+                    isConnecting -> "ПОДОЖДИТЕ"
+                    isConnected  -> "ОТКЛЮЧИТЬ"
+                    else         -> "ПОДКЛЮЧИТЬ"
+                },
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+        }
+    }
+}
+
+// ─── Theme ───────────────────────────────────────────────────────────────────
+
+@Composable
+fun ChelVpnTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = Color(0xFF1565C0),
+            background = Color(0xFF0D1B2A),
+            surface = Color(0xFF1B2838),
+        ),
+        content = content
+    )
+}
