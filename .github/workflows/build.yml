@@ -32,15 +32,70 @@ jobs:
         with:
           path: custom
 
-      - name: Clone v2rayNG source
+      - name: Clone v2rayNG with submodules
         run: |
-          git clone --depth=1 --branch ${{ env.V2RAYNG_VERSION }} \
+          git clone --recurse-submodules --depth=1 --shallow-submodules \
+            --branch ${{ env.V2RAYNG_VERSION }} \
             https://github.com/2dust/v2rayNG.git v2rayng
 
-      - name: Set up JDK 17
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4.0.1
+        with:
+          log-accepted-android-sdk-licenses: false
+          cmdline-tools-version: '13114758'
+          packages: 'platforms;android-36 build-tools;35.0.0 platform-tools'
+
+      - name: Install NDK
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            --channel=0 \
+            --install "ndk;28.2.13676358"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> $GITHUB_ENV
+          sed -i '10i\    ndkVersion = "28.2.13676358"' \
+            v2rayng/V2rayNG/app/build.gradle.kts
+
+      - name: Restore cached libhevtun
+        id: cache-libhevtun
+        uses: actions/cache/restore@v4
+        with:
+          path: v2rayng/libs
+          key: libhevtun-${{ runner.os }}-${{ hashFiles('v2rayng/.git/modules/hev-socks5-tunnel/HEAD') }}
+
+      - name: Build libhevtun
+        if: steps.cache-libhevtun.outputs.cache-hit != 'true'
+        run: |
+          cd v2rayng
+          bash compile-hevtun.sh
+
+      - name: Save libhevtun cache
+        if: steps.cache-libhevtun.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: v2rayng/libs
+          key: libhevtun-${{ runner.os }}-${{ hashFiles('v2rayng/.git/modules/hev-socks5-tunnel/HEAD') }}
+
+      - name: Copy libhevtun to app/libs
+        run: cp -r v2rayng/libs v2rayng/V2rayNG/app/
+
+      - name: Get AndroidLibXrayLite tag
+        run: |
+          cd v2rayng/AndroidLibXrayLite
+          XRAY_TAG=$(git describe --tags --abbrev=0)
+          echo "XRAY_TAG=$XRAY_TAG" >> $GITHUB_ENV
+          echo "AndroidLibXrayLite tag: $XRAY_TAG"
+
+      - name: Download libv2ray.aar
+        uses: robinraju/release-downloader@v1.13
+        with:
+          repository: '2dust/AndroidLibXrayLite'
+          tag: ${{ env.XRAY_TAG }}
+          fileName: 'libv2ray.aar'
+          out-file-path: v2rayng/V2rayNG/app/libs/
+
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
           cache: gradle
 
@@ -49,7 +104,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Pillow for icon resizing
+      - name: Install Pillow
         run: pip install Pillow
 
       - name: Apply ChelVPN customizations
@@ -61,29 +116,27 @@ jobs:
             --scheme "${{ env.DEEP_LINK_SCHEME }}" \
             --icon-src "../../custom/icon/ic_launcher.png"
 
-      - name: Build Release APK (playstore flavor only)
-        run: |
-          cd v2rayng/V2rayNG
-          chmod +x gradlew
-          ./gradlew assemblePlaystoreRelease --no-daemon
-
-      - name: Sign APK
+      - name: Decode keystore
         run: |
           echo "${{ secrets.SIGNING_KEY }}" | base64 -d > keystore.jks
-          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools/" | sort -V | tail -1)
-          echo "Using build-tools: $BUILD_TOOLS"
-          APK_PATH=$(find v2rayng/V2rayNG/app/build/outputs/apk -name "*.apk" | head -1)
-          echo "APK: $APK_PATH"
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/zipalign" -v 4 \
-            "$APK_PATH" ChelVPN_aligned.apk
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
-            --ks keystore.jks \
-            --ks-pass "pass:${{ secrets.KEY_STORE_PASSWORD }}" \
-            --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
-            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
-            --out "ChelVPN_${{ env.V2RAYNG_VERSION }}.apk" \
-            ChelVPN_aligned.apk
-          rm keystore.jks
+
+      - name: Build Release APK
+        run: |
+          cd v2rayng/V2rayNG
+          echo "sdk.dir=${ANDROID_HOME}" > local.properties
+          chmod +x gradlew
+          ./gradlew assemblePlaystoreRelease --no-daemon \
+            -Pandroid.injected.signing.store.file=${{ github.workspace }}/keystore.jks \
+            -Pandroid.injected.signing.store.password=${{ secrets.KEY_STORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
+
+      - name: Collect APK
+        run: |
+          APK=$(find v2rayng/V2rayNG/app/build/outputs/apk -name "*.apk" | head -1)
+          echo "Found APK: $APK"
+          cp "$APK" "ChelVPN_${{ env.V2RAYNG_VERSION }}.apk"
+          rm -f keystore.jks
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
