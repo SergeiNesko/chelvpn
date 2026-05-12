@@ -83,30 +83,60 @@ def patch_manifest(scheme: str):
     print(f"  ✓ AndroidManifest.xml patched")
 
 
-def patch_ui(app_name: str):
-    """Simplify UI: one connect button, hide clutter."""
-    # Hide FAB (add server button) in main layout
-    for layout_path in [
-        "app/src/main/res/layout/activity_main.xml",
-        "app/src/main/res/layout/fragment_main.xml",
-    ]:
-        if not os.path.exists(layout_path):
-            continue
-        with open(layout_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        # Hide FloatingActionButton
-        patched = re.sub(
-            r'(<com\.google\.android\.material\.floatingactionbutton\.FloatingActionButton\b[^>]*?)(?<!android:visibility="gone")(\s*/>|\s*>)',
-            lambda m: m.group(0).replace(m.group(2), f'\n        android:visibility="gone"{m.group(2)}')
-            if 'visibility' not in m.group(0) else m.group(0),
-            content,
-        )
-        if patched != content:
-            with open(layout_path, "w", encoding="utf-8") as f:
-                f.write(patched)
-            print(f"  ✓ FAB hidden in {layout_path}")
-        else:
-            print(f"  ~ FAB not found or already hidden in {layout_path}")
+def patch_ui():
+    """Simplify UI: hide server list and tabs, center the connect FAB."""
+    path = "app/src/main/res/layout/activity_main.xml"
+    if not os.path.exists(path):
+        print(f"  ⚠ {path} not found, skipping UI patch")
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    original = content
+
+    # 1. Hide TabLayout (server group tabs)
+    content = re.sub(
+        r'(android:id="@\+id/tab_group")',
+        r'\1\n        android:visibility="gone"',
+        content, count=1,
+    )
+
+    # 2. Hide ViewPager2 (server list)
+    content = re.sub(
+        r'(android:id="@\+id/view_pager")',
+        r'\1\n                    android:visibility="gone"',
+        content, count=1,
+    )
+
+    # 3. Center FAB FrameLayout and enlarge FAB
+    content = content.replace(
+        'android:layout_gravity="bottom|end"\n                    android:layout_marginBottom="-16dp"\n                    android:layout_marginEnd="@dimen/padding_spacing_dp16">',
+        'android:layout_gravity="center">',
+        1,
+    )
+    content = content.replace(
+        'android:layout_gravity="bottom|end"\n                        android:layout_marginBottom="@dimen/view_height_dp36"',
+        'android:layout_gravity="center"',
+        1,
+    )
+    content = content.replace(
+        'app:useCompatPadding="true"\n                        app:layout_anchorGravity="bottom|right|end"',
+        'app:fabSize="large"\n                        app:useCompatPadding="true"',
+        1,
+    )
+    # Change FAB FrameLayout to full size so center gravity works
+    content = content.replace(
+        '<FrameLayout\n                    android:layout_width="wrap_content"\n                    android:layout_height="wrap_content"\n                    android:layout_gravity="center">',
+        '<FrameLayout\n                    android:layout_width="match_parent"\n                    android:layout_height="match_parent"\n                    android:layout_gravity="center">',
+        1,
+    )
+
+    if content != original:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"  ✓ UI simplified: server list hidden, FAB centered and enlarged")
+    else:
+        print(f"  ⚠ UI patch: no changes made (layout structure may differ)")
 
 
 def resize_and_copy_icon(icon_src: str):
@@ -158,6 +188,7 @@ def main():
     patch_strings(args.app_name)
     patch_build_gradle(args.app_id)
     patch_manifest(args.scheme)
+    patch_ui()
     resize_and_copy_icon(args.icon_src)
 
     print(f"\n✅ Customization complete → {args.app_name}")
