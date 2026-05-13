@@ -58,6 +58,7 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
             <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON" android:value="true" />
+            <meta-data android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="vpn" />
         </service>
 
     </application>
