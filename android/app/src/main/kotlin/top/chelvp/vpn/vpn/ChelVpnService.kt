@@ -36,6 +36,7 @@ class ChelVpnService : VpnService() {
 
     private var tunFd: ParcelFileDescriptor? = null
     private var v2rayPoint: Any? = null
+    private var usedNewApi = false
     private val hevBridge = com.v2ray.ang.service.V2RayVpnService()
 
     // ── Lifecycle ─────────────────────────────────────────────
@@ -53,7 +54,6 @@ class ChelVpnService : VpnService() {
                     return START_NOT_STICKY
                 }
 
-                // Если прошлый запуск завершился нативным крашем — сообщаем
                 val prevStep = getSharedPreferences(PREFS_DEBUG, Context.MODE_PRIVATE)
                     .getString(KEY_STEP, null)
                 if (prevStep != null) {
@@ -86,7 +86,7 @@ class ChelVpnService : VpnService() {
         super.onDestroy()
     }
 
-    // ── Checkpoint (синхронная запись перед каждым нативным вызовом) ──
+    // ── Checkpoint ────────────────────────────────────────────
 
     private fun step(name: String) {
         getSharedPreferences(PREFS_DEBUG, Context.MODE_PRIVATE)
@@ -102,13 +102,7 @@ class ChelVpnService : VpnService() {
     // ── Start / Stop ──────────────────────────────────────────
 
     private fun start(xrayConfig: String) {
-        if (lastError.isNotEmpty()) {
-            // lastError уже содержит информацию о предыдущем краше — не затираем
-            val prev = lastError
-            lastError = prev
-        } else {
-            lastError = ""
-        }
+        if (lastError.isEmpty()) lastError = ""
         try {
             step("copyGeoAssets")
             copyGeoAssets()
@@ -117,9 +111,7 @@ class ChelVpnService : VpnService() {
             val configFile = File(filesDir, "config.json")
             configFile.writeText(xrayConfig)
 
-            step("startXray")
-            startXray(configFile.absolutePath, xrayConfig)
-
+            // TUN строится ДО startXray — новый API startLoop(config, tunFd) требует fd
             step("buildTun")
             tunFd = buildTun()
             if (tunFd == null) {
@@ -130,12 +122,18 @@ class ChelVpnService : VpnService() {
                 return
             }
 
-            step("startHevTunnel")
-            startHevTunnel(tunFd!!.fd)
+            step("startXray")
+            startXray(configFile.absolutePath, xrayConfig, tunFd!!.fd)
+
+            // Старый API (runLoop) не умеет читать TUN напрямую — нужен hev-мост
+            if (!usedNewApi) {
+                step("startHevTunnel")
+                startHevTunnel(tunFd!!.fd)
+            }
 
             clearStep()
             isRunning = true
-            Log.i(TAG, "VPN started")
+            Log.i(TAG, "VPN started, newApi=$usedNewApi")
         } catch (e: Throwable) {
             clearStep()
             if (lastError.isEmpty()) {
@@ -148,6 +146,7 @@ class ChelVpnService : VpnService() {
 
     private fun stop() {
         isRunning = false
+        usedNewApi = false
         try { stopHevTunnel() } catch (_: Throwable) {}
         try { stopXray() }     catch (_: Throwable) {}
         try { tunFd?.close() } catch (_: Throwable) {}
@@ -188,30 +187,45 @@ class ChelVpnService : VpnService() {
         .establish()
 
     // ── Xray via libv2ray (reflection) ────────────────────────
+    //
+    // Новый API (v2rayNG ≥ 2.x, AndroidLibXrayLite):
+    //   Libv2ray.initCoreEnv(assetsDir, key)
+    //   val ctrl = Libv2ray.newCoreController(callback)
+    //   ctrl.startLoop(configJson, tunFd)   ← аналог v2rayNG
+    //   ctrl.stopLoop()
+    //
+    // Старый API (v2rayNG < 2.x):
+    //   val point = Libv2ray.newV2RayPoint(callback)
+    //   point.setConfigureFileContent(json) + point.runLoop(false)
+    //   point.stopLoop()
 
-    private fun startXray(configPath: String, configJson: String) {
+    private fun startXray(configPath: String, configJson: String, tunFd: Int) {
         step("libv2ray.Class.forName")
         val libCls = Class.forName("libv2ray.Libv2ray")
 
-        // initCoreEnv задаёт путь к config.json и .dat файлам — нужен в новом API
+        // initCoreEnv: задаёт рабочую директорию для geo-файлов
         step("initCoreEnv")
         libCls.methods.firstOrNull { it.name == "initCoreEnv" }?.let { m ->
-            runCatching { m.invoke(null, filesDir.absolutePath, filesDir.absolutePath) }
-                .onSuccess { Log.d(TAG, "initCoreEnv OK") }
-                .onFailure { Log.w(TAG, "initCoreEnv: ${it.message}") }
+            runCatching {
+                when (m.parameterTypes.size) {
+                    2    -> m.invoke(null, filesDir.absolutePath, filesDir.absolutePath)
+                    1    -> m.invoke(null, filesDir.absolutePath)
+                    else -> Unit
+                }
+            }.onSuccess { Log.d(TAG, "initCoreEnv OK") }
+             .onFailure { Log.w(TAG, "initCoreEnv: ${it.message}") }
         }
 
-        // Ищем фабричный метод
-        val newPointMethod = libCls.methods.firstOrNull {
+        val factoryMethod = libCls.methods.firstOrNull {
             it.name == "newV2RayPoint" || it.name == "newVpoint" ||
             it.name == "initV2Env"     || it.name == "newCoreController"
         } ?: run {
             val available = libCls.methods.joinToString { it.name }
             throw NoSuchMethodException("Нет фабричного метода. Доступно: $available")
         }
-        Log.d(TAG, "factory=${newPointMethod.name}")
+        Log.d(TAG, "factory=${factoryMethod.name}")
 
-        val supportIface = newPointMethod.parameterTypes[0]
+        val supportIface = factoryMethod.parameterTypes[0]
 
         step("Proxy.newProxyInstance")
         val proxy = Proxy.newProxyInstance(
@@ -220,40 +234,58 @@ class ChelVpnService : VpnService() {
             XrayProtocol()
         )
 
-        step(newPointMethod.name)
-        val point = if (newPointMethod.parameterTypes.size == 1) {
-            newPointMethod.invoke(null, proxy)!!
+        step(factoryMethod.name)
+        val point = if (factoryMethod.parameterTypes.size == 1) {
+            factoryMethod.invoke(null, proxy)!!
         } else {
-            newPointMethod.invoke(null, proxy, false)!!
+            factoryMethod.invoke(null, proxy, false)!!
         }
         v2rayPoint = point
 
-        // Пробуем задать конфиг и запустить runLoop на контроллере,
-        // если нет — пробуем через getCallbackHandler()
-        step("setConfigureFileContent")
-        val target = findConfigTarget(point) ?: run {
-            val ctrlMethods = descMethods(point)
-            val handlerMethods = runCatching {
-                val h = point.javaClass.getMethod("getCallbackHandler").invoke(point)
-                if (h != null) "handler.methods=${descMethods(h)}" else "handler=null"
-            }.getOrElse { "handler.err=${it.message}" }
-            throw IllegalStateException("ctrl=$ctrlMethods | $handlerMethods")
+        step("startCore")
+        usedNewApi = false
+
+        // Пробуем новый API: startLoop(configContent, tunFd) — по аналогии с v2rayNG
+        if (tryStartLoop(point, configJson, tunFd)) {
+            usedNewApi = true
+            Log.d(TAG, "Core started via startLoop (new API)")
+            return
         }
 
-        step("setConfig+runLoop")
-        invokeConfig(target, configJson, configPath)
-        invokeRunLoop(target)
+        // Fallback: старый API setConfigureFileContent + runLoop
+        if (tryOldApiStart(point, configJson, configPath)) {
+            Log.d(TAG, "Core started via runLoop (old API)")
+            return
+        }
+
+        val methods = descMethods(point)
+        throw IllegalStateException("Не могу запустить ядро. Методы контроллера: $methods")
     }
 
-    private fun findConfigTarget(point: Any): Any? {
-        // Сначала проверяем сам контроллер
-        if (hasMethod(point, "setConfigureFileContent") || hasMethod(point, "runLoop")) return point
-        // Потом getCallbackHandler()
+    // Новый API v2rayNG: controller.startLoop(configContent: String, tunFd: Int)
+    private fun tryStartLoop(point: Any, configJson: String, tunFd: Int): Boolean {
+        val m = point.javaClass.methods.firstOrNull { m ->
+            m.name == "startLoop" && m.parameterTypes.size == 2 &&
+            m.parameterTypes[0] == String::class.java
+        } ?: return false
+
         return runCatching {
-            val h = point.javaClass.getMethod("getCallbackHandler").invoke(point)
-            if (h != null && (hasMethod(h, "setConfigureFileContent") || hasMethod(h, "runLoop"))) h
-            else null
-        }.getOrNull()
+            val fdArg: Any = if (m.parameterTypes[1] == java.lang.Long.TYPE) tunFd.toLong()
+                             else tunFd
+            val result = m.invoke(point, configJson, fdArg)
+            Log.d(TAG, "startLoop OK, result=$result")
+        }.onFailure { Log.e(TAG, "startLoop threw: ${it.message}") }.isSuccess
+    }
+
+    // Старый API v2rayNG: setConfigureFileContent + runLoop(false)
+    private fun tryOldApiStart(point: Any, configJson: String, configPath: String): Boolean {
+        if (!hasMethod(point, "setConfigureFileContent") &&
+            !hasMethod(point, "setConfigureFile") &&
+            !hasMethod(point, "runLoop")) return false
+
+        invokeConfig(point, configJson, configPath)
+        invokeRunLoop(point)
+        return true
     }
 
     private fun hasMethod(obj: Any, name: String) =
@@ -271,7 +303,7 @@ class ChelVpnService : VpnService() {
             target.javaClass.getMethod("setConfigureFile", String::class.java)
                 .invoke(target, path)
         }.isSuccess
-        if (!ok) Log.w(TAG, "config method not found on ${target.javaClass.simpleName}, Xray reads from filesDir via initCoreEnv")
+        if (!ok) Log.w(TAG, "config method not found, Xray reads from filesDir via initCoreEnv")
     }
 
     private fun invokeRunLoop(target: Any) {
@@ -281,18 +313,20 @@ class ChelVpnService : VpnService() {
                 val found = target.javaClass.methods
                     .filter { it.name.contains("run", ignoreCase = true) || it.name.contains("start", ignoreCase = true) }
                     .joinToString { "${it.name}(${it.parameterTypes.joinToString { p -> p.simpleName }})" }
-                throw NoSuchMethodException("runLoop не найден. run/start: $found")
+                throw NoSuchMethodException("runLoop не найден. run/start методы: $found")
             }
         m.invoke(target, false)
     }
 
     private fun stopXray() {
-        v2rayPoint?.let {
-            runCatching { it.javaClass.getMethod("stopLoop").invoke(it) }
+        v2rayPoint?.let { point ->
+            runCatching { point.javaClass.getMethod("stopLoop").invoke(point) }
         }
         v2rayPoint = null
+        usedNewApi = false
     }
 
+    // Callback для libv2ray — реализуем интерфейс VpnServiceSupports / CoreCallbackHandler
     private inner class XrayProtocol : InvocationHandler {
         override fun invoke(proxy: Any?, method: Method?, args: Array<out Any?>?): Any? {
             return when (method?.name) {
@@ -304,7 +338,10 @@ class ChelVpnService : VpnService() {
                     }
                     protect(fd)
                 }
-                "onEmitStatus" -> 0L
+                // Новый CoreCallbackHandler
+                "startup", "shutdown" -> 0
+                // Оба API
+                "onEmitStatus" -> primitiveDefault(method)
                 else -> primitiveDefault(method)
             }
         }
@@ -322,7 +359,7 @@ class ChelVpnService : VpnService() {
         }
     }
 
-    // ── hev-socks5-tunnel ────────────────────────────────────
+    // ── hev-socks5-tunnel (только для старого API) ────────────
 
     private var hevThread: Thread? = null
 
