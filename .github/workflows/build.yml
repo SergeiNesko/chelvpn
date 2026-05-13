@@ -90,13 +90,13 @@ jobs:
           echo "=== jniLibs contents ==="
           find custom/android/app/src/main/jniLibs -name "*.so"
 
-      - name: Copy geo data files from v2rayNG assets
+      - name: Download geo data files
         run: |
           mkdir -p custom/android/app/src/main/assets
-          cp v2rayng/V2rayNG/app/src/main/assets/geoip.dat \
-             custom/android/app/src/main/assets/geoip.dat
-          cp v2rayng/V2rayNG/app/src/main/assets/geosite.dat \
-             custom/android/app/src/main/assets/geosite.dat
+          wget -q "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat" \
+               -O custom/android/app/src/main/assets/geoip.dat
+          wget -q "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat" \
+               -O custom/android/app/src/main/assets/geosite.dat
           echo "=== assets ==="
           ls -lh custom/android/app/src/main/assets/
 
