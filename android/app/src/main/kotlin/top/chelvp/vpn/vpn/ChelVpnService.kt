@@ -207,7 +207,7 @@ class ChelVpnService : VpnService() {
 
         step("Proxy.newProxyInstance")
         val proxy = Proxy.newProxyInstance(
-            Thread.currentThread().contextClassLoader,
+            supportIface.classLoader,
             arrayOf(supportIface),
             XrayProtocol()
         )
