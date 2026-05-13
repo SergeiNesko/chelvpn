@@ -126,11 +126,13 @@ class ChelVpnService : VpnService() {
             step("startXray")
             startXray(configFile.absolutePath, xrayConfig, tunFd!!.fd)
 
-            // hev-socks5-tunnel нужен всегда — читает TUN и отправляет в SOCKS5 xray
-            // startLoop(config, tunFd) в v2rayNG использует tunFd для защиты сокетов,
-            // НЕ для чтения TUN напрямую
-            step("startHevTunnel")
-            startHevTunnel(tunFd!!.fd)
+            // Новый API: xray читает TUN напрямую через startLoop(config, tunFd).
+            // addDisallowedApplication исключает наш процесс из VPN → нет routing loop.
+            // Старый API: xray слушает SOCKS5, hev читает TUN и форвардит.
+            if (!usedNewApi) {
+                step("startHevTunnel")
+                startHevTunnel(tunFd!!.fd)
+            }
 
             // "running" — чекпоинт остаётся на диске, чтобы async-краш был виден
             step("running")
@@ -277,9 +279,9 @@ class ChelVpnService : VpnService() {
     }
 
     // Новый API v2rayNG: controller.startLoop(configContent: String, tunFd: Int)
-    // tunFd передаём -1: xray запускается в SOCKS5-режиме (не читает TUN напрямую)
-    // и вызывает protect() через CoreCallbackHandler для защиты outbound-сокетов.
-    // TUN читает hev-socks5-tunnel и отправляет в SOCKS5 xray.
+    // Передаём реальный tunFd — xray читает TUN напрямую (аналог v2rayNG TUN-режима).
+    // addDisallowedApplication исключает наш процесс из VPN → outbound xray идёт
+    // мимо TUN прямо в сеть → нет routing loop, не нужен protect().
     private fun tryStartLoop(point: Any, configJson: String, tunFd: Int): Boolean {
         val m = point.javaClass.methods.firstOrNull { m ->
             m.name == "startLoop" && m.parameterTypes.size == 2 &&
@@ -287,10 +289,9 @@ class ChelVpnService : VpnService() {
         } ?: return false
 
         return runCatching {
-            // -1 = no TUN fd: xray uses SOCKS5 inbound, calls protect() on outbound sockets
-            val noFd: Any = if (m.parameterTypes[1] == java.lang.Long.TYPE) (-1L) else (-1)
-            val result = m.invoke(point, configJson, noFd)
-            Log.d(TAG, "startLoop(-1) OK, result=$result")
+            val fdArg: Any = if (m.parameterTypes[1] == java.lang.Long.TYPE) tunFd.toLong() else tunFd
+            val result = m.invoke(point, configJson, fdArg)
+            Log.d(TAG, "startLoop(fd=$tunFd) OK, result=$result")
         }.onFailure { Log.e(TAG, "startLoop threw: ${it.message}") }.isSuccess
     }
 
