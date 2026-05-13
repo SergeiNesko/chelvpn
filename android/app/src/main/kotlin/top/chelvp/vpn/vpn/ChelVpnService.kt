@@ -259,11 +259,6 @@ class ChelVpnService : VpnService() {
             .edit().putString(KEY_CTRL_METHODS, ctrlMethods).commit()
         Log.d(TAG, "Controller methods: $ctrlMethods")
 
-        // incRefnum: без этого счётчик ссылок = 0 → xray auto-stops через ~50ms
-        runCatching { point.javaClass.getMethod("incRefnum").invoke(point) }
-            .onSuccess { Log.d(TAG, "incRefnum OK") }
-            .onFailure { Log.w(TAG, "incRefnum: ${it.message}") }
-
         // ProcessFinder: нужен xray для per-app routing; регистрируем заглушку
         registerProcessFinderStub(point)
 
@@ -394,9 +389,25 @@ class ChelVpnService : VpnService() {
                     }
                     protect(fd)
                 }
-                // Новый CoreCallbackHandler
-                "startup", "shutdown" -> 0
-                // Оба API
+                // v2rayNG: в Startup() вызывает setIsRunning(true) на контроллере.
+                // Без этого мониторинговая горутина xray видит isRunning=false и stops.
+                "startup" -> {
+                    runCatching {
+                        v2rayPoint?.javaClass
+                            ?.getMethod("setIsRunning", Boolean::class.javaPrimitiveType)
+                            ?.invoke(v2rayPoint, true)
+                    }.onSuccess { Log.d(TAG, "setIsRunning(true) via Startup()") }
+                     .onFailure { Log.w(TAG, "setIsRunning: ${it.message}") }
+                    0
+                }
+                "shutdown" -> {
+                    runCatching {
+                        v2rayPoint?.javaClass
+                            ?.getMethod("setIsRunning", Boolean::class.javaPrimitiveType)
+                            ?.invoke(v2rayPoint, false)
+                    }
+                    0
+                }
                 "onEmitStatus" -> primitiveDefault(method)
                 else -> primitiveDefault(method)
             }
