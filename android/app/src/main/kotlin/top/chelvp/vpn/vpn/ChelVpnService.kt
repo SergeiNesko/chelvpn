@@ -193,7 +193,15 @@ class ChelVpnService : VpnService() {
         step("libv2ray.Class.forName")
         val libCls = Class.forName("libv2ray.Libv2ray")
 
-        // Factory method (name changed across libv2ray versions)
+        // initCoreEnv задаёт путь к config.json и .dat файлам — нужен в новом API
+        step("initCoreEnv")
+        libCls.methods.firstOrNull { it.name == "initCoreEnv" }?.let { m ->
+            runCatching { m.invoke(null, filesDir.absolutePath, filesDir.absolutePath) }
+                .onSuccess { Log.d(TAG, "initCoreEnv OK") }
+                .onFailure { Log.w(TAG, "initCoreEnv: ${it.message}") }
+        }
+
+        // Ищем фабричный метод
         val newPointMethod = libCls.methods.firstOrNull {
             it.name == "newV2RayPoint" || it.name == "newVpoint" ||
             it.name == "initV2Env"     || it.name == "newCoreController"
@@ -201,7 +209,7 @@ class ChelVpnService : VpnService() {
             val available = libCls.methods.joinToString { it.name }
             throw NoSuchMethodException("Нет фабричного метода. Доступно: $available")
         }
-        Log.d(TAG, "factory=${newPointMethod.name} params=${newPointMethod.parameterCount}")
+        Log.d(TAG, "factory=${newPointMethod.name}")
 
         val supportIface = newPointMethod.parameterTypes[0]
 
@@ -220,45 +228,62 @@ class ChelVpnService : VpnService() {
         }
         v2rayPoint = point
 
+        // Пробуем задать конфиг и запустить runLoop на контроллере,
+        // если нет — пробуем через getCallbackHandler()
         step("setConfigureFileContent")
-        val configMethod = point.javaClass.methods.firstOrNull { m ->
-            m.name.lowercase().contains("config") || m.name.lowercase().contains("content")
-        }
-        val configSet = if (configMethod != null) {
-            Log.d(TAG, "configMethod=${configMethod.name} params=${configMethod.parameterTypes.map { it.simpleName }}")
-            runCatching {
-                if (configMethod.parameterTypes.size == 1 &&
-                    configMethod.parameterTypes[0] == String::class.java) {
-                    configMethod.invoke(point, configJson)
-                } else {
-                    configMethod.invoke(point, configPath)
-                }
-            }.isSuccess
-        } else {
-            false
-        }
-        if (!configSet) {
-            val methods = point.javaClass.methods
-                .filterNot { it.declaringClass == Any::class.java }
-                .joinToString { m -> "${m.name}(${m.parameterTypes.joinToString { p -> p.simpleName }})" }
-            throw IllegalStateException("Методы контроллера: $methods")
+        val target = findConfigTarget(point) ?: run {
+            val ctrlMethods = descMethods(point)
+            val handlerMethods = runCatching {
+                val h = point.javaClass.getMethod("getCallbackHandler").invoke(point)
+                if (h != null) "handler.methods=${descMethods(h)}" else "handler=null"
+            }.getOrElse { "handler.err=${it.message}" }
+            throw IllegalStateException("ctrl=$ctrlMethods | $handlerMethods")
         }
 
-        step("runLoop")
-        val runMethod = runCatching {
-            point.javaClass.getMethod("runLoop", Boolean::class.java)
-        }.getOrElse {
-            runCatching {
-                point.javaClass.getMethod("runLoop", java.lang.Boolean::class.java)
-            }.getOrElse {
-                val found = point.javaClass.methods
-                    .filter { m -> m.name.contains("run", ignoreCase = true) ||
-                                   m.name.contains("start", ignoreCase = true) }
-                    .joinToString { m -> "${m.name}(${m.parameterTypes.joinToString { p -> p.simpleName }})" }
+        step("setConfig+runLoop")
+        invokeConfig(target, configJson, configPath)
+        invokeRunLoop(target)
+    }
+
+    private fun findConfigTarget(point: Any): Any? {
+        // Сначала проверяем сам контроллер
+        if (hasMethod(point, "setConfigureFileContent") || hasMethod(point, "runLoop")) return point
+        // Потом getCallbackHandler()
+        return runCatching {
+            val h = point.javaClass.getMethod("getCallbackHandler").invoke(point)
+            if (h != null && (hasMethod(h, "setConfigureFileContent") || hasMethod(h, "runLoop"))) h
+            else null
+        }.getOrNull()
+    }
+
+    private fun hasMethod(obj: Any, name: String) =
+        obj.javaClass.methods.any { it.name == name }
+
+    private fun descMethods(obj: Any) = obj.javaClass.methods
+        .filterNot { it.declaringClass == Object::class.java }
+        .joinToString { m -> "${m.name}(${m.parameterTypes.joinToString { p -> p.simpleName }})" }
+
+    private fun invokeConfig(target: Any, json: String, path: String) {
+        val ok = runCatching {
+            target.javaClass.getMethod("setConfigureFileContent", String::class.java)
+                .invoke(target, json)
+        }.isSuccess || runCatching {
+            target.javaClass.getMethod("setConfigureFile", String::class.java)
+                .invoke(target, path)
+        }.isSuccess
+        if (!ok) Log.w(TAG, "config method not found on ${target.javaClass.simpleName}, Xray reads from filesDir via initCoreEnv")
+    }
+
+    private fun invokeRunLoop(target: Any) {
+        val m = runCatching { target.javaClass.getMethod("runLoop", Boolean::class.java) }
+            .getOrElse { runCatching { target.javaClass.getMethod("runLoop", java.lang.Boolean::class.java) }.getOrNull() }
+            ?: run {
+                val found = target.javaClass.methods
+                    .filter { it.name.contains("run", ignoreCase = true) || it.name.contains("start", ignoreCase = true) }
+                    .joinToString { "${it.name}(${it.parameterTypes.joinToString { p -> p.simpleName }})" }
                 throw NoSuchMethodException("runLoop не найден. run/start: $found")
             }
-        }
-        runMethod.invoke(point, false)
+        m.invoke(target, false)
     }
 
     private fun stopXray() {
