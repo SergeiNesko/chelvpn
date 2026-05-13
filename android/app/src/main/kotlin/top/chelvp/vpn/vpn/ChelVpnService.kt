@@ -126,11 +126,11 @@ class ChelVpnService : VpnService() {
             step("startXray")
             startXray(configFile.absolutePath, xrayConfig, tunFd!!.fd)
 
-            // Старый API (runLoop) не умеет читать TUN напрямую — нужен hev-мост
-            if (!usedNewApi) {
-                step("startHevTunnel")
-                startHevTunnel(tunFd!!.fd)
-            }
+            // hev-socks5-tunnel нужен всегда — читает TUN и отправляет в SOCKS5 xray
+            // startLoop(config, tunFd) в v2rayNG использует tunFd для защиты сокетов,
+            // НЕ для чтения TUN напрямую
+            step("startHevTunnel")
+            startHevTunnel(tunFd!!.fd)
 
             // "running" — чекпоинт остаётся на диске, чтобы async-краш был виден
             step("running")
