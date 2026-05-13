@@ -223,10 +223,31 @@ class ChelVpnService : VpnService() {
     private inner class XrayProtocol : InvocationHandler {
         override fun invoke(proxy: Any?, method: Method?, args: Array<out Any?>?): Any? {
             return when (method?.name) {
-                "protect" -> protect((args?.get(0) as? Long)?.toInt() ?: 0)
+                "protect" -> {
+                    // fd may come as Int or Long depending on libv2ray version
+                    val fd = when (val a = args?.get(0)) {
+                        is Long -> a.toInt()
+                        is Int  -> a
+                        else    -> 0
+                    }
+                    protect(fd)
+                }
                 "onEmitStatus" -> 0L
-                else -> null
+                else -> primitiveDefault(method)
             }
+        }
+
+        // Returning null for a primitive-typed method causes NPE inside JNI → native crash
+        private fun primitiveDefault(method: Method?): Any? = when (method?.returnType) {
+            java.lang.Boolean.TYPE   -> false
+            java.lang.Integer.TYPE   -> 0
+            java.lang.Long.TYPE      -> 0L
+            java.lang.Double.TYPE    -> 0.0
+            java.lang.Float.TYPE     -> 0f
+            java.lang.Short.TYPE     -> 0.toShort()
+            java.lang.Byte.TYPE      -> 0.toByte()
+            java.lang.Character.TYPE -> ' '
+            else                     -> null
         }
     }
 
