@@ -48,12 +48,20 @@ class MainViewModel : ViewModel() {
         if (lastStep != null && ChelVpnService.lastError.isEmpty()) {
             val methodsInfo = if (ctrlMethods != null) " | ctrl: $ctrlMethods" else ""
             var errorMsg = "Краш после шага: $lastStep$methodsInfo"
-            // Читаем xray.log — показывает что делал xray перед крашем
+            // xray.log — что xray делал перед крашем
             try {
                 val logFile = java.io.File(context.filesDir, "xray.log")
                 if (logFile.exists() && logFile.length() > 0) {
-                    val tail = logFile.readText().trimEnd().takeLast(500)
+                    val tail = logFile.readText().trimEnd().takeLast(400)
                     if (tail.isNotEmpty()) errorMsg += "\n\nXray log:\n$tail"
+                }
+            } catch (_: Throwable) {}
+            // xray_panic.log — Go panic trace (stderr fd=2), невидимый ранее
+            try {
+                val panicFile = java.io.File(context.filesDir, ChelVpnService.PANIC_LOG)
+                if (panicFile.exists() && panicFile.length() > 0) {
+                    val tail = panicFile.readText().trimEnd().takeLast(600)
+                    if (tail.isNotEmpty()) errorMsg += "\n\nGo panic:\n$tail"
                 }
             } catch (_: Throwable) {}
             ChelVpnService.lastError = errorMsg

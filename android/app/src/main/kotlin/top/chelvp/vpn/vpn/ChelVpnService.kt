@@ -10,6 +10,8 @@ import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.system.Os
+import android.system.OsConstants
 import android.util.Log
 import top.chelvp.vpn.R
 import top.chelvp.vpn.ui.MainActivity
@@ -30,6 +32,7 @@ class ChelVpnService : VpnService() {
         const val PREFS_DEBUG = "chelvpn_debug"
         const val KEY_STEP = "last_step"
         const val KEY_CTRL_METHODS = "ctrl_methods"
+        const val PANIC_LOG = "xray_panic.log"
 
         @Volatile var isRunning = false
         @Volatile var lastError = ""
@@ -125,6 +128,10 @@ class ChelVpnService : VpnService() {
                 stop()
                 return
             }
+
+            // Перехватываем stderr (fd=2) в файл — туда Go пишет panic trace.
+            // xray.log содержит только xray-логи; Go panic уходит в stderr и был невидим.
+            redirectStderr()
 
             step("startXray")
             startXray(configFile.absolutePath, enrichedConfig, tunFd!!.fd)
@@ -429,6 +436,26 @@ class ChelVpnService : VpnService() {
             java.lang.Byte.TYPE      -> 0.toByte()
             java.lang.Character.TYPE -> ' '
             else                     -> null
+        }
+    }
+
+    // ── Stderr capture ────────────────────────────────────────
+    // Go panic trace пишется в stderr (fd=2), не в xray.log.
+    // Перенаправляем fd=2 в файл до запуска xray — следующий запуск прочитает его.
+    private fun redirectStderr() {
+        try {
+            val f = File(filesDir, PANIC_LOG)
+            f.delete()
+            val fd = Os.open(
+                f.absolutePath,
+                OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_TRUNC,
+                0x1b4 // 0644
+            )
+            Os.dup2(fd, 2)
+            Os.close(fd)
+            Log.d(TAG, "stderr → ${f.absolutePath}")
+        } catch (e: Throwable) {
+            Log.w(TAG, "redirectStderr: ${e.message}")
         }
     }
 
