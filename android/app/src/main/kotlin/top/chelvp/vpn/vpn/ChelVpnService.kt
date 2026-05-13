@@ -189,6 +189,9 @@ class ChelVpnService : VpnService() {
         .addRoute("::", 0)
         .addDnsServer("1.1.1.1")
         .addDnsServer("8.8.8.8")
+        // Исключаем наш процесс из VPN: xray подключается к серверу напрямую,
+        // минуя TUN — нет routing loop без вызова protect()
+        .addDisallowedApplication(packageName)
         .establish()
 
     // ── Xray via libv2ray (reflection) ────────────────────────
