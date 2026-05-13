@@ -38,7 +38,7 @@ class ChelVpnService : VpnService() {
     private var tunFd: ParcelFileDescriptor? = null
     private var v2rayPoint: Any? = null
     private var usedNewApi = false
-    private val hevBridge = com.v2ray.ang.service.V2RayVpnService()
+    private var hevBridge: com.v2ray.ang.service.V2RayVpnService? = null
 
     // ── Lifecycle ─────────────────────────────────────────────
 
@@ -109,8 +109,12 @@ class ChelVpnService : VpnService() {
             copyGeoAssets()
 
             step("writeConfig")
+            // Inject xray debug log path for crash diagnostics
+            val xrayLog = File(filesDir, "xray.log")
+            xrayLog.delete()
+            val enrichedConfig = injectLogPath(xrayConfig, xrayLog.absolutePath)
             val configFile = File(filesDir, "config.json")
-            configFile.writeText(xrayConfig)
+            configFile.writeText(enrichedConfig)
 
             // TUN строится ДО startXray — новый API startLoop(config, tunFd) требует fd
             step("buildTun")
@@ -124,7 +128,7 @@ class ChelVpnService : VpnService() {
             }
 
             step("startXray")
-            startXray(configFile.absolutePath, xrayConfig, tunFd!!.fd)
+            startXray(configFile.absolutePath, enrichedConfig, tunFd!!.fd)
 
             // Новый API: xray читает TUN напрямую через startLoop(config, tunFd).
             // addDisallowedApplication исключает наш процесс из VPN → нет routing loop.
@@ -258,6 +262,14 @@ class ChelVpnService : VpnService() {
             .edit().putString(KEY_CTRL_METHODS, ctrlMethods).commit()
         Log.d(TAG, "Controller methods: $ctrlMethods")
 
+        // incRefnum: без этого счётчик ссылок = 0 → xray auto-stops через ~50ms
+        runCatching { point.javaClass.getMethod("incRefnum").invoke(point) }
+            .onSuccess { Log.d(TAG, "incRefnum OK") }
+            .onFailure { Log.w(TAG, "incRefnum: ${it.message}") }
+
+        // ProcessFinder: нужен xray для per-app routing; регистрируем заглушку
+        registerProcessFinderStub(point)
+
         step("startCore")
         usedNewApi = false
 
@@ -344,6 +356,35 @@ class ChelVpnService : VpnService() {
         usedNewApi = false
     }
 
+    private fun registerProcessFinderStub(point: Any) {
+        val m = point.javaClass.methods.firstOrNull { it.name == "registerProcessFinder" } ?: return
+        if (m.parameterTypes.isEmpty()) return
+        val iface = m.parameterTypes[0]
+        runCatching {
+            val stub = Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { _, method, _ ->
+                when (method?.returnType) {
+                    java.lang.Long.TYPE    -> 0L
+                    java.lang.Integer.TYPE -> 0
+                    java.lang.Boolean.TYPE -> false
+                    else                   -> null
+                }
+            }
+            m.invoke(point, stub)
+            Log.d(TAG, "ProcessFinder stub registered")
+        }.onFailure { Log.w(TAG, "registerProcessFinder: ${it.message}") }
+    }
+
+    private fun injectLogPath(config: String, logPath: String): String {
+        return try {
+            val json = org.json.JSONObject(config)
+            val log = json.optJSONObject("log") ?: org.json.JSONObject()
+            log.put("loglevel", "debug")
+            log.put("error", logPath)
+            json.put("log", log)
+            json.toString()
+        } catch (_: Throwable) { config }
+    }
+
     // Callback для libv2ray — реализуем интерфейс VpnServiceSupports / CoreCallbackHandler
     private inner class XrayProtocol : InvocationHandler {
         override fun invoke(proxy: Any?, method: Method?, args: Array<out Any?>?): Any? {
@@ -384,16 +425,19 @@ class ChelVpnService : VpnService() {
     private fun startHevTunnel(fd: Int) {
         step("loadLibrary.hev-socks5-tunnel")
         System.loadLibrary("hev-socks5-tunnel")
+        val bridge = com.v2ray.ang.service.V2RayVpnService()
+        hevBridge = bridge
         val cfg = buildHevConfig()
         step("hevStart")
         hevThread = Thread(null, {
-            try { hevBridge.hevStart(cfg, fd) }
+            try { bridge.hevStart(cfg, fd) }
             catch (e: Throwable) { Log.e(TAG, "hevStart error", e) }
         }, "hev-tunnel").also { it.isDaemon = true; it.start() }
     }
 
     private fun stopHevTunnel() {
-        runCatching { hevBridge.hevStop() }
+        runCatching { hevBridge?.hevStop() }
+        hevBridge = null
         hevThread?.interrupt()
         hevThread = null
     }

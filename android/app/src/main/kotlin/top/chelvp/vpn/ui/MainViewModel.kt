@@ -47,7 +47,16 @@ class MainViewModel : ViewModel() {
         val ctrlMethods = sp.getString(ChelVpnService.KEY_CTRL_METHODS, null)
         if (lastStep != null && ChelVpnService.lastError.isEmpty()) {
             val methodsInfo = if (ctrlMethods != null) " | ctrl: $ctrlMethods" else ""
-            ChelVpnService.lastError = "Краш после шага: $lastStep$methodsInfo"
+            var errorMsg = "Краш после шага: $lastStep$methodsInfo"
+            // Читаем xray.log — показывает что делал xray перед крашем
+            try {
+                val logFile = java.io.File(context.filesDir, "xray.log")
+                if (logFile.exists() && logFile.length() > 0) {
+                    val tail = logFile.readText().trimEnd().takeLast(500)
+                    if (tail.isNotEmpty()) errorMsg += "\n\nXray log:\n$tail"
+                }
+            } catch (_: Throwable) {}
+            ChelVpnService.lastError = errorMsg
         }
         refreshState()
     }
