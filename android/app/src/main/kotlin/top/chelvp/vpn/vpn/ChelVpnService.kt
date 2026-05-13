@@ -186,14 +186,12 @@ class ChelVpnService : VpnService() {
 
     private fun buildTun(): ParcelFileDescriptor? = Builder()
         .setSession("ChelVPN")
-        .setMtu(1500)
-        .addAddress("172.19.0.1", 30)
+        .setMtu(9000)           // v2rayNG использует 9000
+        .addAddress("26.26.26.1", 24)  // v2rayNG использует этот адрес
         .addRoute("0.0.0.0", 0)
         .addRoute("::", 0)
         .addDnsServer("1.1.1.1")
         .addDnsServer("8.8.8.8")
-        // Исключаем наш процесс из VPN: xray подключается к серверу напрямую,
-        // минуя TUN — нет routing loop без вызова protect()
         .addDisallowedApplication(packageName)
         .establish()
 
@@ -384,8 +382,11 @@ class ChelVpnService : VpnService() {
         return try {
             val json = org.json.JSONObject(config)
             val log = json.optJSONObject("log") ?: org.json.JSONObject()
-            log.put("loglevel", "debug")
+            log.put("loglevel", "warning")
             log.put("error", logPath)
+            // access лог — каждая строка = один проксированный запрос.
+            // Если пустой после подключения — TUN-стек не передаёт пакеты в xray.
+            log.put("access", logPath.replace("xray.log", "xray_access.log"))
             json.put("log", log)
             json.toString()
         } catch (_: Throwable) { config }

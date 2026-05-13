@@ -152,9 +152,26 @@ class MainViewModel : ViewModel() {
     private suspend fun measurePing(): Int = withContext(Dispatchers.IO) {
         try {
             val start = System.currentTimeMillis()
-            java.net.Socket().use {
-                it.soTimeout = 5000
-                it.connect(java.net.InetSocketAddress("1.1.1.1", 443), 5000)
+            // Подключаемся через SOCKS5-прокси xray (127.0.0.1:10808) к 1.1.1.1:443
+            // чтобы пинг отражал реальную задержку через VPN-сервер, а не прямое соединение
+            val socks = java.net.Socket()
+            socks.soTimeout = 5000
+            socks.connect(java.net.InetSocketAddress("127.0.0.1", 10808), 3000)
+            socks.use { s ->
+                val out = s.getOutputStream()
+                val inp = s.getInputStream()
+                // SOCKS5 handshake
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                val buf = ByteArray(2)
+                inp.read(buf)
+                if (buf[0] != 0x05.toByte() || buf[1] != 0x00.toByte()) return@withContext -1
+                // CONNECT 1.1.1.1:443
+                out.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 1, 1, 1, 1, 0x01, 0xBB.toByte()))
+                out.flush()
+                val rep = ByteArray(10)
+                inp.read(rep)
+                if (rep[1] != 0x00.toByte()) return@withContext -1
             }
             (System.currentTimeMillis() - start).toInt()
         } catch (_: Exception) { -1 }
