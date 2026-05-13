@@ -82,7 +82,7 @@ class ChelVpnService : VpnService() {
 
             isRunning = true
             Log.i(TAG, "VPN started")
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             lastError = "${e.javaClass.simpleName}: ${e.message?.take(120)}"
             Log.e(TAG, "Failed to start VPN", e)
             stop()
@@ -91,9 +91,9 @@ class ChelVpnService : VpnService() {
 
     private fun stop() {
         isRunning = false
-        try { stopHevTunnel() } catch (_: Exception) {}
-        try { stopXray() }     catch (_: Exception) {}
-        try { tunFd?.close() } catch (_: Exception) {}
+        try { stopHevTunnel() } catch (_: Throwable) {}
+        try { stopXray() }     catch (_: Throwable) {}
+        try { tunFd?.close() } catch (_: Throwable) {}
         tunFd = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -117,18 +117,17 @@ class ChelVpnService : VpnService() {
     private fun startXray(configPath: String, configJson: String) {
         val libCls = Class.forName("libv2ray.Libv2ray")
 
-        // Newer libv2ray (2.x) requires initCoreEnv(assetPath, datDir) before newCoreController
+        // initCoreEnv needed in libv2ray 2.x before creating the controller
         libCls.methods.firstOrNull { it.name == "initCoreEnv" }?.let { initMethod ->
             try {
-                val assetPath = filesDir.absolutePath
-                initMethod.invoke(null, assetPath, assetPath)
+                initMethod.invoke(null, filesDir.absolutePath, filesDir.absolutePath)
                 Log.d(TAG, "initCoreEnv OK")
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.w(TAG, "initCoreEnv skipped: ${e.message}")
             }
         }
 
-        // Находим метод-фабрику динамически (имя менялось между версиями aar)
+        // Factory method name varies across libv2ray versions
         val newPointMethod = libCls.methods.firstOrNull {
             it.name == "newV2RayPoint" || it.name == "newVpoint" ||
             it.name == "initV2Env" || it.name == "newCoreController"
@@ -137,7 +136,6 @@ class ChelVpnService : VpnService() {
             throw NoSuchMethodException("Методы Libv2ray: $available")
         }
 
-        // Тип первого параметра — это и есть нужный интерфейс (V2RayVpnServiceSupports или аналог)
         val supportIface = newPointMethod.parameterTypes[0]
         Log.d(TAG, "factory=${newPointMethod.name} iface=${supportIface.name}")
 
@@ -155,21 +153,35 @@ class ChelVpnService : VpnService() {
         }
         v2rayPoint = point
 
-        // setConfigureFileContent принимает JSON-строку; setConfigureFile — путь к файлу
-        runCatching {
+        // Try JSON content first, then file path; propagate error if both fail
+        val configSet = runCatching {
             point.javaClass.getMethod("setConfigureFileContent", String::class.java)
                 .invoke(point, configJson)
-        }.onFailure {
+        }.isSuccess || runCatching {
             point.javaClass.getMethod("setConfigureFile", String::class.java)
                 .invoke(point, configPath)
-        }
+        }.isSuccess
+        if (!configSet) throw IllegalStateException("Не удалось передать конфиг в libv2ray")
 
-        point.javaClass.getMethod("runLoop", Boolean::class.java).invoke(point, false)
+        // runLoop — try primitive boolean, then boxed Boolean, then search by name
+        val runMethod = runCatching {
+            point.javaClass.getMethod("runLoop", Boolean::class.java)
+        }.getOrElse {
+            runCatching {
+                point.javaClass.getMethod("runLoop", java.lang.Boolean::class.java)
+            }.getOrElse {
+                val found = point.javaClass.methods
+                    .filter { m -> m.name.contains("run", ignoreCase = true) || m.name.contains("start", ignoreCase = true) }
+                    .joinToString { m -> "${m.name}(${m.parameterTypes.joinToString { p -> p.simpleName }})" }
+                throw NoSuchMethodException("runLoop не найден. run/start методы: $found")
+            }
+        }
+        runMethod.invoke(point, false)
     }
 
     private fun stopXray() {
         v2rayPoint?.let {
-            it.javaClass.getMethod("stopLoop").invoke(it)
+            runCatching { it.javaClass.getMethod("stopLoop").invoke(it) }
         }
         v2rayPoint = null
     }
