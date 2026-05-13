@@ -274,6 +274,9 @@ class ChelVpnService : VpnService() {
     }
 
     // Новый API v2rayNG: controller.startLoop(configContent: String, tunFd: Int)
+    // tunFd передаём -1: xray запускается в SOCKS5-режиме (не читает TUN напрямую)
+    // и вызывает protect() через CoreCallbackHandler для защиты outbound-сокетов.
+    // TUN читает hev-socks5-tunnel и отправляет в SOCKS5 xray.
     private fun tryStartLoop(point: Any, configJson: String, tunFd: Int): Boolean {
         val m = point.javaClass.methods.firstOrNull { m ->
             m.name == "startLoop" && m.parameterTypes.size == 2 &&
@@ -281,10 +284,10 @@ class ChelVpnService : VpnService() {
         } ?: return false
 
         return runCatching {
-            val fdArg: Any = if (m.parameterTypes[1] == java.lang.Long.TYPE) tunFd.toLong()
-                             else tunFd
-            val result = m.invoke(point, configJson, fdArg)
-            Log.d(TAG, "startLoop OK, result=$result")
+            // -1 = no TUN fd: xray uses SOCKS5 inbound, calls protect() on outbound sockets
+            val noFd: Any = if (m.parameterTypes[1] == java.lang.Long.TYPE) (-1L) else (-1)
+            val result = m.invoke(point, configJson, noFd)
+            Log.d(TAG, "startLoop(-1) OK, result=$result")
         }.onFailure { Log.e(TAG, "startLoop threw: ${it.message}") }.isSuccess
     }
 
