@@ -283,10 +283,9 @@ class ChelVpnService : VpnService() {
     }
 
     // Новый API v2rayNG: controller.startLoop(configContent: String, tunFd: Int)
-    // hev-socks5-tunnel JNI_OnLoad крашится (SIGABRT) → используем TUN mode xray.
-    // Передаём реальный tunFd: xray читает TUN напрямую через собственный netstack.
+    // Go-код вызывает Startup() на callback для получения TUN fd — см. XrayProtocol.
     // addDisallowedApplication(packageName) исключает наш процесс из VPN →
-    // outbound-соединения xray идут мимо TUN → нет routing loop без protect().
+    // outbound-соединения xray идут мимо TUN → нет routing loop.
     private fun tryStartLoop(point: Any, configJson: String, tunFd: Int): Boolean {
         val m = point.javaClass.methods.firstOrNull { m ->
             m.name == "startLoop" && m.parameterTypes.size == 2 &&
@@ -297,6 +296,13 @@ class ChelVpnService : VpnService() {
             val fdArg: Any = if (m.parameterTypes[1] == java.lang.Long.TYPE) tunFd.toLong() else tunFd
             val result = m.invoke(point, configJson, fdArg)
             Log.d(TAG, "startLoop(fd=$tunFd) OK, result=$result")
+            // v2rayNG вызывает setIsRunning(true) после startLoop()
+            runCatching {
+                point.javaClass
+                    .getMethod("setIsRunning", Boolean::class.javaPrimitiveType)
+                    .invoke(point, true)
+                Log.d(TAG, "setIsRunning(true) after startLoop")
+            }.onFailure { Log.w(TAG, "setIsRunning: ${it.message}") }
         }.onFailure { Log.e(TAG, "startLoop threw: ${it.message}") }.isSuccess
     }
 
@@ -378,11 +384,19 @@ class ChelVpnService : VpnService() {
         } catch (_: Throwable) { config }
     }
 
-    // Callback для libv2ray — реализуем интерфейс VpnServiceSupports / CoreCallbackHandler
+    // Callback для libv2ray — реализуем интерфейс CoreCallbackHandler.
+    //
+    // ВАЖНО: Startup() должен вернуть реальный TUN fd.
+    // Go-код вызывает Startup() на callback чтобы получить fd для своего TUN-стека.
+    // Если вернуть 0 — Go пытается читать stdin как TUN-интерфейс → Go panic → SIGABRT.
+    // v2rayNG: override fun Startup() = vpnInterfaceFd?.fd ?: -1
+    //
+    // Имена методов в новом API (gomobile, capital case): Startup, Shutdown, OnEmitStatus.
+    // Старый API (V2RayVpnServiceSupports): protect, onEmitStatus (lowercase).
     private inner class XrayProtocol : InvocationHandler {
         override fun invoke(proxy: Any?, method: Method?, args: Array<out Any?>?): Any? {
             return when (method?.name) {
-                "protect" -> {
+                "protect", "Protect" -> {
                     val fd = when (val a = args?.get(0)) {
                         is Long -> a.toInt()
                         is Int  -> a
@@ -390,26 +404,17 @@ class ChelVpnService : VpnService() {
                     }
                     protect(fd)
                 }
-                // v2rayNG: в Startup() вызывает setIsRunning(true) на контроллере.
-                // Без этого мониторинговая горутина xray видит isRunning=false и stops.
-                "startup" -> {
-                    runCatching {
-                        v2rayPoint?.javaClass
-                            ?.getMethod("setIsRunning", Boolean::class.javaPrimitiveType)
-                            ?.invoke(v2rayPoint, true)
-                    }.onSuccess { Log.d(TAG, "setIsRunning(true) via Startup()") }
-                     .onFailure { Log.w(TAG, "setIsRunning: ${it.message}") }
+                // Возвращаем реальный TUN fd — Go-код использует его для netstack
+                "Startup", "startup" -> {
+                    val fd = tunFd?.fd ?: -1
+                    Log.d(TAG, "Startup() → fd=$fd")
+                    fd
+                }
+                "Shutdown", "shutdown" -> {
+                    Log.d(TAG, "Shutdown() called")
                     0
                 }
-                "shutdown" -> {
-                    runCatching {
-                        v2rayPoint?.javaClass
-                            ?.getMethod("setIsRunning", Boolean::class.javaPrimitiveType)
-                            ?.invoke(v2rayPoint, false)
-                    }
-                    0
-                }
-                "onEmitStatus" -> primitiveDefault(method)
+                "OnEmitStatus", "onEmitStatus" -> primitiveDefault(method)
                 else -> primitiveDefault(method)
             }
         }
