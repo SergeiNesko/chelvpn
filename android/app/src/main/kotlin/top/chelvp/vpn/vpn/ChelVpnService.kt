@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.VpnService
@@ -26,6 +27,8 @@ class ChelVpnService : VpnService() {
         private const val TAG  = "ChelVpnService"
         private const val NOTIF_CHANNEL = "chelvpn_vpn"
         private const val NOTIF_ID = 1
+        private const val PREFS_DEBUG = "chelvpn_debug"
+        private const val KEY_STEP = "last_step"
 
         @Volatile var isRunning = false
         @Volatile var lastError = ""
@@ -49,6 +52,16 @@ class ChelVpnService : VpnService() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
+
+                // Если прошлый запуск завершился нативным крашем — сообщаем
+                val prevStep = getSharedPreferences(PREFS_DEBUG, Context.MODE_PRIVATE)
+                    .getString(KEY_STEP, null)
+                if (prevStep != null) {
+                    lastError = "Нативный краш после шага: $prevStep"
+                    Log.e(TAG, "Previous native crash at: $prevStep")
+                    clearStep()
+                }
+
                 try {
                     val notif = buildNotification()
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -73,33 +86,61 @@ class ChelVpnService : VpnService() {
         super.onDestroy()
     }
 
+    // ── Checkpoint (синхронная запись перед каждым нативным вызовом) ──
+
+    private fun step(name: String) {
+        getSharedPreferences(PREFS_DEBUG, Context.MODE_PRIVATE)
+            .edit().putString(KEY_STEP, name).commit()
+        Log.d(TAG, "step: $name")
+    }
+
+    private fun clearStep() {
+        getSharedPreferences(PREFS_DEBUG, Context.MODE_PRIVATE)
+            .edit().remove(KEY_STEP).commit()
+    }
+
     // ── Start / Stop ──────────────────────────────────────────
 
     private fun start(xrayConfig: String) {
-        lastError = ""
+        if (lastError.isNotEmpty()) {
+            // lastError уже содержит информацию о предыдущем краше — не затираем
+            val prev = lastError
+            lastError = prev
+        } else {
+            lastError = ""
+        }
         try {
+            step("copyGeoAssets")
             copyGeoAssets()
 
+            step("writeConfig")
             val configFile = File(filesDir, "config.json")
             configFile.writeText(xrayConfig)
 
+            step("startXray")
             startXray(configFile.absolutePath, xrayConfig)
 
+            step("buildTun")
             tunFd = buildTun()
             if (tunFd == null) {
+                clearStep()
                 lastError = "Не удалось создать TUN-интерфейс (нет разрешения VPN?)"
                 Log.e(TAG, lastError)
                 stop()
                 return
             }
 
-            // hevStart блокирует поток — запускаем в отдельном потоке
+            step("startHevTunnel")
             startHevTunnel(tunFd!!.fd)
 
+            clearStep()
             isRunning = true
             Log.i(TAG, "VPN started")
         } catch (e: Throwable) {
-            lastError = "${e.javaClass.simpleName}: ${e.message?.take(120)}"
+            clearStep()
+            if (lastError.isEmpty()) {
+                lastError = "${e.javaClass.simpleName}: ${e.message?.take(120)}"
+            }
             Log.e(TAG, "Failed to start VPN", e)
             stop()
         }
@@ -128,7 +169,7 @@ class ChelVpnService : VpnService() {
                     }
                     Log.d(TAG, "Copied $name to filesDir")
                 } catch (e: Throwable) {
-                    Log.w(TAG, "$name not in assets, skipping: ${e.message}")
+                    Log.w(TAG, "$name not in assets: ${e.message}")
                 }
             }
         }
@@ -138,7 +179,7 @@ class ChelVpnService : VpnService() {
 
     private fun buildTun(): ParcelFileDescriptor? = Builder()
         .setSession("ChelVPN")
-        .setMtu(8500)
+        .setMtu(1500)
         .addAddress("172.19.0.1", 30)
         .addRoute("0.0.0.0", 0)
         .addRoute("::", 0)
@@ -149,37 +190,29 @@ class ChelVpnService : VpnService() {
     // ── Xray via libv2ray (reflection) ────────────────────────
 
     private fun startXray(configPath: String, configJson: String) {
+        step("libv2ray.Class.forName")
         val libCls = Class.forName("libv2ray.Libv2ray")
 
-        // initCoreEnv needed in libv2ray 2.x before creating the controller
-        libCls.methods.firstOrNull { it.name == "initCoreEnv" }?.let { initMethod ->
-            try {
-                initMethod.invoke(null, filesDir.absolutePath, filesDir.absolutePath)
-                Log.d(TAG, "initCoreEnv OK")
-            } catch (e: Throwable) {
-                Log.w(TAG, "initCoreEnv skipped: ${e.message}")
-            }
-        }
-
-        // Factory method name varies across libv2ray versions
+        // Factory method (name changed across libv2ray versions)
         val newPointMethod = libCls.methods.firstOrNull {
             it.name == "newV2RayPoint" || it.name == "newVpoint" ||
-            it.name == "initV2Env" || it.name == "newCoreController"
+            it.name == "initV2Env"     || it.name == "newCoreController"
         } ?: run {
             val available = libCls.methods.joinToString { it.name }
-            throw NoSuchMethodException("Методы Libv2ray: $available")
+            throw NoSuchMethodException("Нет фабричного метода. Доступно: $available")
         }
+        Log.d(TAG, "factory=${newPointMethod.name} params=${newPointMethod.parameterCount}")
 
         val supportIface = newPointMethod.parameterTypes[0]
-        Log.d(TAG, "factory=${newPointMethod.name} iface=${supportIface.name}")
 
+        step("Proxy.newProxyInstance")
         val proxy = Proxy.newProxyInstance(
             Thread.currentThread().contextClassLoader,
             arrayOf(supportIface),
             XrayProtocol()
         )
 
-        // newCoreController(supports) — 1 param; newV2RayPoint(supports, useIPv6) — 2 params
+        step(newPointMethod.name)
         val point = if (newPointMethod.parameterTypes.size == 1) {
             newPointMethod.invoke(null, proxy)!!
         } else {
@@ -187,7 +220,7 @@ class ChelVpnService : VpnService() {
         }
         v2rayPoint = point
 
-        // Try JSON content first, then file path; propagate error if both fail
+        step("setConfigureFileContent")
         val configSet = runCatching {
             point.javaClass.getMethod("setConfigureFileContent", String::class.java)
                 .invoke(point, configJson)
@@ -197,7 +230,7 @@ class ChelVpnService : VpnService() {
         }.isSuccess
         if (!configSet) throw IllegalStateException("Не удалось передать конфиг в libv2ray")
 
-        // runLoop — try primitive boolean, then boxed Boolean, then search by name
+        step("runLoop")
         val runMethod = runCatching {
             point.javaClass.getMethod("runLoop", Boolean::class.java)
         }.getOrElse {
@@ -205,9 +238,10 @@ class ChelVpnService : VpnService() {
                 point.javaClass.getMethod("runLoop", java.lang.Boolean::class.java)
             }.getOrElse {
                 val found = point.javaClass.methods
-                    .filter { m -> m.name.contains("run", ignoreCase = true) || m.name.contains("start", ignoreCase = true) }
+                    .filter { m -> m.name.contains("run", ignoreCase = true) ||
+                                   m.name.contains("start", ignoreCase = true) }
                     .joinToString { m -> "${m.name}(${m.parameterTypes.joinToString { p -> p.simpleName }})" }
-                throw NoSuchMethodException("runLoop не найден. run/start методы: $found")
+                throw NoSuchMethodException("runLoop не найден. run/start: $found")
             }
         }
         runMethod.invoke(point, false)
@@ -224,7 +258,6 @@ class ChelVpnService : VpnService() {
         override fun invoke(proxy: Any?, method: Method?, args: Array<out Any?>?): Any? {
             return when (method?.name) {
                 "protect" -> {
-                    // fd may come as Int or Long depending on libv2ray version
                     val fd = when (val a = args?.get(0)) {
                         is Long -> a.toInt()
                         is Int  -> a
@@ -237,7 +270,6 @@ class ChelVpnService : VpnService() {
             }
         }
 
-        // Returning null for a primitive-typed method causes NPE inside JNI → native crash
         private fun primitiveDefault(method: Method?): Any? = when (method?.returnType) {
             java.lang.Boolean.TYPE   -> false
             java.lang.Integer.TYPE   -> 0
@@ -246,7 +278,7 @@ class ChelVpnService : VpnService() {
             java.lang.Float.TYPE     -> 0f
             java.lang.Short.TYPE     -> 0.toShort()
             java.lang.Byte.TYPE      -> 0.toByte()
-            java.lang.Character.TYPE -> ' '
+            java.lang.Character.TYPE -> ' '
             else                     -> null
         }
     }
@@ -256,11 +288,13 @@ class ChelVpnService : VpnService() {
     private var hevThread: Thread? = null
 
     private fun startHevTunnel(fd: Int) {
+        step("loadLibrary.hev-socks5-tunnel")
         System.loadLibrary("hev-socks5-tunnel")
         val cfg = buildHevConfig()
+        step("hevStart")
         hevThread = Thread(null, {
             try { hevBridge.hevStart(cfg, fd) }
-            catch (e: Exception) { Log.e(TAG, "hevStart error", e) }
+            catch (e: Throwable) { Log.e(TAG, "hevStart error", e) }
         }, "hev-tunnel").also { it.isDaemon = true; it.start() }
     }
 
@@ -277,13 +311,10 @@ misc:
   read-write-timeout: 60
   log-file: stderr
   log-level: warn
-  pid-file: ''
   limit-nofile: 65535
 tunnel:
-  mtu: 8500
+  mtu: 1500
   ipv4-address: 172.19.0.1
-  restrict-ports:
-  restrict-ips:
 socks5:
   port: ${ConfigBuilder.SOCKS_PORT}
   address: 127.0.0.1
