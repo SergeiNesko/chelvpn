@@ -127,17 +127,8 @@ class ChelVpnService : VpnService() {
                 return
             }
 
-            // Загружаем hev ДО запуска xray-горутин: исключаем JNI race condition
-            // между загрузкой нативной библиотеки и уже работающим Go runtime
-            step("loadLibrary.hev-socks5-tunnel")
-            System.loadLibrary("hev-socks5-tunnel")
-
             step("startXray")
             startXray(configFile.absolutePath, enrichedConfig, tunFd!!.fd)
-
-            // hev-сокет уже загружен выше, startHevTunnel только запускает поток
-            step("startHevTunnel")
-            startHevTunnel(tunFd!!.fd)
 
             // "running" — чекпоинт остаётся на диске, чтобы async-краш был виден
             step("running")
@@ -294,9 +285,10 @@ class ChelVpnService : VpnService() {
     }
 
     // Новый API v2rayNG: controller.startLoop(configContent: String, tunFd: Int)
-    // Передаём -1 (как делает v2rayNG): xray работает в SOCKS5-режиме, без чтения TUN.
-    // Android VPN fd несовместим с Go's os.File — передача реального fd → panic в Go-рутине.
-    // TUN читает hev-socks5-tunnel (C-библиотека) и форвардит в SOCKS5 127.0.0.1:10808.
+    // hev-socks5-tunnel JNI_OnLoad крашится (SIGABRT) → используем TUN mode xray.
+    // Передаём реальный tunFd: xray читает TUN напрямую через собственный netstack.
+    // addDisallowedApplication(packageName) исключает наш процесс из VPN →
+    // outbound-соединения xray идут мимо TUN → нет routing loop без protect().
     private fun tryStartLoop(point: Any, configJson: String, tunFd: Int): Boolean {
         val m = point.javaClass.methods.firstOrNull { m ->
             m.name == "startLoop" && m.parameterTypes.size == 2 &&
@@ -304,9 +296,9 @@ class ChelVpnService : VpnService() {
         } ?: return false
 
         return runCatching {
-            val noFd: Any = if (m.parameterTypes[1] == java.lang.Long.TYPE) (-1L) else (-1)
-            val result = m.invoke(point, configJson, noFd)
-            Log.d(TAG, "startLoop(-1) OK, result=$result")
+            val fdArg: Any = if (m.parameterTypes[1] == java.lang.Long.TYPE) tunFd.toLong() else tunFd
+            val result = m.invoke(point, configJson, fdArg)
+            Log.d(TAG, "startLoop(fd=$tunFd) OK, result=$result")
         }.onFailure { Log.e(TAG, "startLoop threw: ${it.message}") }.isSuccess
     }
 
