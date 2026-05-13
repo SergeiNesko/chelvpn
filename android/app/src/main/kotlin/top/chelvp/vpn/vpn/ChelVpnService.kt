@@ -221,14 +221,28 @@ class ChelVpnService : VpnService() {
         v2rayPoint = point
 
         step("setConfigureFileContent")
-        val configSet = runCatching {
-            point.javaClass.getMethod("setConfigureFileContent", String::class.java)
-                .invoke(point, configJson)
-        }.isSuccess || runCatching {
-            point.javaClass.getMethod("setConfigureFile", String::class.java)
-                .invoke(point, configPath)
-        }.isSuccess
-        if (!configSet) throw IllegalStateException("Не удалось передать конфиг в libv2ray")
+        val configMethod = point.javaClass.methods.firstOrNull { m ->
+            m.name.lowercase().contains("config") || m.name.lowercase().contains("content")
+        }
+        val configSet = if (configMethod != null) {
+            Log.d(TAG, "configMethod=${configMethod.name} params=${configMethod.parameterTypes.map { it.simpleName }}")
+            runCatching {
+                if (configMethod.parameterTypes.size == 1 &&
+                    configMethod.parameterTypes[0] == String::class.java) {
+                    configMethod.invoke(point, configJson)
+                } else {
+                    configMethod.invoke(point, configPath)
+                }
+            }.isSuccess
+        } else {
+            false
+        }
+        if (!configSet) {
+            val methods = point.javaClass.methods
+                .filterNot { it.declaringClass == Any::class.java }
+                .joinToString { m -> "${m.name}(${m.parameterTypes.joinToString { p -> p.simpleName }})" }
+            throw IllegalStateException("Методы контроллера: $methods")
+        }
 
         step("runLoop")
         val runMethod = runCatching {
