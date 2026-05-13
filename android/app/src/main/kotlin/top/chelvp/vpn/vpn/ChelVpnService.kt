@@ -127,11 +127,15 @@ class ChelVpnService : VpnService() {
                 return
             }
 
+            // Загружаем hev ДО запуска xray-горутин: исключаем JNI race condition
+            // между загрузкой нативной библиотеки и уже работающим Go runtime
+            step("loadLibrary.hev-socks5-tunnel")
+            System.loadLibrary("hev-socks5-tunnel")
+
             step("startXray")
             startXray(configFile.absolutePath, enrichedConfig, tunFd!!.fd)
 
-            // hev-socks5-tunnel читает TUN и форвардит в SOCKS5 127.0.0.1:10808.
-            // xray всегда в SOCKS5-режиме (startLoop(-1)), TUN он не читает.
+            // hev-сокет уже загружен выше, startHevTunnel только запускает поток
             step("startHevTunnel")
             startHevTunnel(tunFd!!.fd)
 
@@ -214,16 +218,23 @@ class ChelVpnService : VpnService() {
         step("libv2ray.Class.forName")
         val libCls = Class.forName("libv2ray.Libv2ray")
 
-        // initCoreEnv: задаёт рабочую директорию для geo-файлов
+        // initCoreEnv(assetsPath, deviceId) — v2rayNG передаёт ANDROID_ID как deviceId.
+        // Ранее передавали filesDir как второй аргумент — Go-горутина xray пыталась
+        // использовать путь как device UUID, парсинг падал → SIGABRT через ~50ms.
         step("initCoreEnv")
+        val androidId = runCatching {
+            android.provider.Settings.Secure.getString(
+                contentResolver, android.provider.Settings.Secure.ANDROID_ID
+            ) ?: ""
+        }.getOrDefault("")
         libCls.methods.firstOrNull { it.name == "initCoreEnv" }?.let { m ->
             runCatching {
                 when (m.parameterTypes.size) {
-                    2    -> m.invoke(null, filesDir.absolutePath, filesDir.absolutePath)
+                    2    -> m.invoke(null, filesDir.absolutePath, androidId)
                     1    -> m.invoke(null, filesDir.absolutePath)
                     else -> Unit
                 }
-            }.onSuccess { Log.d(TAG, "initCoreEnv OK") }
+            }.onSuccess { Log.d(TAG, "initCoreEnv OK, id=$androidId") }
              .onFailure { Log.w(TAG, "initCoreEnv: ${it.message}") }
         }
 
@@ -431,8 +442,7 @@ class ChelVpnService : VpnService() {
     private var hevThread: Thread? = null
 
     private fun startHevTunnel(fd: Int) {
-        step("loadLibrary.hev-socks5-tunnel")
-        System.loadLibrary("hev-socks5-tunnel")
+        // Library loaded earlier in start() before xray goroutines started
         val bridge = com.v2ray.ang.service.V2RayVpnService()
         hevBridge = bridge
         val cfg = buildHevConfig()
