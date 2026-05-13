@@ -90,6 +90,16 @@ jobs:
           echo "=== jniLibs contents ==="
           find custom/android/app/src/main/jniLibs -name "*.so"
 
+      - name: Copy geo data files from v2rayNG assets
+        run: |
+          mkdir -p custom/android/app/src/main/assets
+          cp v2rayng/V2rayNG/app/src/main/assets/geoip.dat \
+             custom/android/app/src/main/assets/geoip.dat
+          cp v2rayng/V2rayNG/app/src/main/assets/geosite.dat \
+             custom/android/app/src/main/assets/geosite.dat
+          echo "=== assets ==="
+          ls -lh custom/android/app/src/main/assets/
+
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:

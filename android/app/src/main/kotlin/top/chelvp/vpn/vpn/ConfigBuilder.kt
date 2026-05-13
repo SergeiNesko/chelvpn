@@ -68,7 +68,7 @@ object ConfigBuilder {
             })
         })
 
-        // Routing — всё через прокси кроме локальных адресов
+        // Routing — direct для локальных адресов (без geoip.dat, явные CIDR)
         root.put("routing", JSONObject().apply {
             put("domainStrategy", "IPIfNonMatch")
             put("rules", JSONArray().apply {
@@ -76,7 +76,13 @@ object ConfigBuilder {
                     put("type", "field")
                     put("outboundTag", "direct")
                     put("ip", JSONArray().apply {
-                        put("geoip:private")
+                        put("127.0.0.0/8")
+                        put("10.0.0.0/8")
+                        put("172.16.0.0/12")
+                        put("192.168.0.0/16")
+                        put("169.254.0.0/16")
+                        put("::1/128")
+                        put("fc00::/7")
                     })
                 })
             })

@@ -78,6 +78,8 @@ class ChelVpnService : VpnService() {
     private fun start(xrayConfig: String) {
         lastError = ""
         try {
+            copyGeoAssets()
+
             val configFile = File(filesDir, "config.json")
             configFile.writeText(xrayConfig)
 
@@ -112,6 +114,24 @@ class ChelVpnService : VpnService() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         Log.i(TAG, "VPN stopped")
+    }
+
+    // ── Geo assets ────────────────────────────────────────────
+
+    private fun copyGeoAssets() {
+        listOf("geoip.dat", "geosite.dat").forEach { name ->
+            val dest = File(filesDir, name)
+            if (!dest.exists()) {
+                try {
+                    assets.open(name).use { input ->
+                        dest.outputStream().use { input.copyTo(it) }
+                    }
+                    Log.d(TAG, "Copied $name to filesDir")
+                } catch (e: Throwable) {
+                    Log.w(TAG, "$name not in assets, skipping: ${e.message}")
+                }
+            }
+        }
     }
 
     // ── TUN ───────────────────────────────────────────────────
