@@ -71,17 +71,30 @@ jobs:
           path: v2rayng/libs
           key: libhevtun-${{ runner.os }}-${{ hashFiles('v2rayng/.git/modules/hev-socks5-tunnel/HEAD') }}
 
-      - name: Download libv2ray.aar
+      - name: Get libv2ray.aar
         run: |
-          cd v2rayng/AndroidLibXrayLite
-          git fetch --tags --depth=1
-          XRAY_TAG=$(git describe --tags --abbrev=0)
-          echo "AndroidLibXrayLite version: $XRAY_TAG"
-          mkdir -p ../../custom/android/app/libs
-          wget \
-            "https://github.com/2dust/AndroidLibXrayLite/releases/download/${XRAY_TAG}/libv2ray.aar" \
-            -O ../../custom/android/app/libs/libv2ray.aar
-          ls -lh ../../custom/android/app/libs/
+          mkdir -p custom/android/app/libs
+          # v2rayNG хранит готовый libv2ray.aar в своём репозитории
+          V2RAYNG_AAR=$(find v2rayng -name "libv2ray.aar" | head -1)
+          if [ -n "$V2RAYNG_AAR" ]; then
+            echo "Copying libv2ray.aar from v2rayNG: $V2RAYNG_AAR"
+            cp "$V2RAYNG_AAR" custom/android/app/libs/libv2ray.aar
+          else
+            echo "Not found in v2rayNG, downloading from releases..."
+            cd v2rayng/AndroidLibXrayLite
+            git fetch --tags 2>/dev/null || true
+            XRAY_TAG=$(git tag --points-at HEAD | grep -E '^[0-9v]' | sort -V | tail -1)
+            [ -z "$XRAY_TAG" ] && XRAY_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            echo "Tag: $XRAY_TAG"
+            cd ../..
+            wget -q \
+              "https://github.com/2dust/AndroidLibXrayLite/releases/download/${XRAY_TAG}/libv2ray.aar" \
+              -O custom/android/app/libs/libv2ray.aar || \
+            wget -q \
+              "https://github.com/2dust/AndroidLibXrayLite/releases/latest/download/libv2ray.aar" \
+              -O custom/android/app/libs/libv2ray.aar
+          fi
+          ls -lh custom/android/app/libs/
 
       - name: Copy hev-socks5-tunnel .so files
         run: |
