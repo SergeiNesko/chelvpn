@@ -27,8 +27,9 @@ class ChelVpnService : VpnService() {
         private const val TAG  = "ChelVpnService"
         private const val NOTIF_CHANNEL = "chelvpn_vpn"
         private const val NOTIF_ID = 1
-        private const val PREFS_DEBUG = "chelvpn_debug"
-        private const val KEY_STEP = "last_step"
+        const val PREFS_DEBUG = "chelvpn_debug"
+        const val KEY_STEP = "last_step"
+        const val KEY_CTRL_METHODS = "ctrl_methods"
 
         @Volatile var isRunning = false
         @Volatile var lastError = ""
@@ -131,7 +132,8 @@ class ChelVpnService : VpnService() {
                 startHevTunnel(tunFd!!.fd)
             }
 
-            clearStep()
+            // "running" — чекпоинт остаётся на диске, чтобы async-краш был виден
+            step("running")
             isRunning = true
             Log.i(TAG, "VPN started, newApi=$usedNewApi")
         } catch (e: Throwable) {
@@ -147,6 +149,9 @@ class ChelVpnService : VpnService() {
     private fun stop() {
         isRunning = false
         usedNewApi = false
+        clearStep()
+        getSharedPreferences(PREFS_DEBUG, Context.MODE_PRIVATE)
+            .edit().remove(KEY_CTRL_METHODS).apply()
         try { stopHevTunnel() } catch (_: Throwable) {}
         try { stopXray() }     catch (_: Throwable) {}
         try { tunFd?.close() } catch (_: Throwable) {}
@@ -241,6 +246,12 @@ class ChelVpnService : VpnService() {
             factoryMethod.invoke(null, proxy, false)!!
         }
         v2rayPoint = point
+
+        // Сохраняем методы контроллера в SharedPreferences ДО запуска — переживёт краш
+        val ctrlMethods = descMethods(point)
+        getSharedPreferences(PREFS_DEBUG, Context.MODE_PRIVATE)
+            .edit().putString(KEY_CTRL_METHODS, ctrlMethods).commit()
+        Log.d(TAG, "Controller methods: $ctrlMethods")
 
         step("startCore")
         usedNewApi = false

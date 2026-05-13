@@ -17,6 +17,7 @@ import top.chelvp.vpn.subscription.SubscriptionManager
 import top.chelvp.vpn.util.Prefs
 import top.chelvp.vpn.vpn.ChelVpnService
 import top.chelvp.vpn.vpn.ConfigBuilder
+import android.content.Context.MODE_PRIVATE
 
 data class MainUiState(
     val isConnected: Boolean = false,
@@ -40,6 +41,14 @@ class MainViewModel : ViewModel() {
 
     fun init(context: Context) {
         prefs = Prefs(context)
+        // Читаем checkpoint напрямую из SharedPreferences — не ждём сервис
+        val sp = context.getSharedPreferences(ChelVpnService.PREFS_DEBUG, MODE_PRIVATE)
+        val lastStep = sp.getString(ChelVpnService.KEY_STEP, null)
+        val ctrlMethods = sp.getString(ChelVpnService.KEY_CTRL_METHODS, null)
+        if (lastStep != null && ChelVpnService.lastError.isEmpty()) {
+            val methodsInfo = if (ctrlMethods != null) " | ctrl: $ctrlMethods" else ""
+            ChelVpnService.lastError = "Краш после шага: $lastStep$methodsInfo"
+        }
         refreshState()
     }
 
