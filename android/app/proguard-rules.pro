@@ -2,9 +2,6 @@
 -keep class libv2ray.** { *; }
 -dontwarn libv2ray.**
 
-# hev-socks5-tunnel JNI bridge (v2rayNG class path — JNI_OnLoad registers natives on this class)
--keep class com.v2ray.ang.service.V2RayVpnService { *; }
-
 # Keep our VPN service intact
 -keep class top.chelvp.vpn.vpn.** { *; }
 

@@ -38,7 +38,6 @@ class ChelVpnService : VpnService() {
     private var tunFd: ParcelFileDescriptor? = null
     private var v2rayPoint: Any? = null
     private var usedNewApi = false
-    private var hevBridge: com.v2ray.ang.service.V2RayVpnService? = null
 
     // ── Lifecycle ─────────────────────────────────────────────
 
@@ -150,8 +149,7 @@ class ChelVpnService : VpnService() {
         clearStep()
         getSharedPreferences(PREFS_DEBUG, Context.MODE_PRIVATE)
             .edit().remove(KEY_CTRL_METHODS).apply()
-        try { stopHevTunnel() } catch (_: Throwable) {}
-        try { stopXray() }     catch (_: Throwable) {}
+        try { stopXray() } catch (_: Throwable) {}
         try { tunFd?.close() } catch (_: Throwable) {}
         tunFd = null
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -428,50 +426,6 @@ class ChelVpnService : VpnService() {
             else                     -> null
         }
     }
-
-    // ── hev-socks5-tunnel (только для старого API) ────────────
-
-    private var hevThread: Thread? = null
-
-    private fun startHevTunnel(fd: Int) {
-        // Library loaded earlier in start() before xray goroutines started
-        val bridge = com.v2ray.ang.service.V2RayVpnService()
-        hevBridge = bridge
-        val cfg = buildHevConfig()
-        step("hevStart")
-        hevThread = Thread(null, {
-            try { bridge.hevStart(cfg, fd) }
-            catch (e: Throwable) { Log.e(TAG, "hevStart error", e) }
-        }, "hev-tunnel").also { it.isDaemon = true; it.start() }
-    }
-
-    private fun stopHevTunnel() {
-        runCatching { hevBridge?.hevStop() }
-        hevBridge = null
-        hevThread?.interrupt()
-        hevThread = null
-    }
-
-    private fun buildHevConfig(): String = """
-misc:
-  task-stack-size: 81920
-  connect-timeout: 300
-  read-write-timeout: 60
-  log-file: stderr
-  log-level: warn
-  limit-nofile: 65535
-tunnel:
-  mtu: 1500
-  ipv4-address: 172.19.0.1
-socks5:
-  port: ${ConfigBuilder.SOCKS_PORT}
-  address: 127.0.0.1
-  udp: udp
-  pipeline: false
-dns:
-  port: 0
-  address: 224.0.0.0
-""".trimIndent()
 
     // ── Notification ──────────────────────────────────────────
 
