@@ -141,21 +141,31 @@ jobs:
         run: |
           cd custom/android
           echo "sdk.dir=${ANDROID_HOME}" > local.properties
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          ./gradlew assembleRelease assembleDebug --no-daemon --stacktrace
 
-      - name: Collect APK
+      - name: Collect APKs
         run: |
-          APK=$(find custom/android/app/build/outputs/apk -name "*.apk" | head -1)
-          echo "APK: $APK"
-          cp "$APK" "ChelVPN_${{ env.V2RAYNG_VERSION }}.apk"
+          RELEASE_APK=$(find custom/android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          DEBUG_APK=$(find custom/android/app/build/outputs/apk/debug -name "*.apk" | head -1)
+          echo "Release: $RELEASE_APK"
+          echo "Debug:   $DEBUG_APK"
+          cp "$RELEASE_APK" "ChelVPN_${{ env.V2RAYNG_VERSION }}.apk"
+          cp "$DEBUG_APK"   "ChelVPN_${{ env.V2RAYNG_VERSION }}_DEBUG.apk"
           rm -f keystore.jks
 
-      - name: Upload APK artifact
+      - name: Upload Release APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: ChelVPN_${{ env.V2RAYNG_VERSION }}
           path: ChelVPN_${{ env.V2RAYNG_VERSION }}.apk
           retention-days: 30
+
+      - name: Upload Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChelVPN_${{ env.V2RAYNG_VERSION }}_DEBUG
+          path: ChelVPN_${{ env.V2RAYNG_VERSION }}_DEBUG.apk
+          retention-days: 7
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -171,5 +181,7 @@ jobs:
             2. Разреши установку из неизвестных источников
             3. Установи и получи ключ/подписку в боте @VpnChelyaba_Bot
             4. Нажми «ПОДКЛЮЧИТЬ»
+
+            > DEBUG-версия доступна в артефактах сборки (вкладка Actions → Artifacts).
           files: ChelVPN_${{ env.V2RAYNG_VERSION }}.apk
           make_latest: true
