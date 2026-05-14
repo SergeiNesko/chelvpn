@@ -221,22 +221,18 @@ class ChelVpnService : VpnService() {
                 contentResolver, android.provider.Settings.Secure.ANDROID_ID
             ) ?: ""
         }.getOrDefault("")
-        // joinToString { "%02x".format(byte) } даёт неверный результат для Kotlin Byte ≥ 0x80
-        // (знаковый тип, %02x расширяет до int со знаком → не 2 символа).
-        // Используем явный lookup без format.
+        // Go base64-декодирует ключ переданный в initCoreEnv и проверяет len == 32.
+        // Доказательство из паник:
+        //   ANDROID_ID 16 символов → base64 → 12 байт → "len 12"
+        //   MD5-hex 32 символа     → base64 → 24 байта → "len 24"
+        // Нужно: base64(SHA-256(androidId)) → Go декодирует → 32 байта → len == 32 ✓
         val deviceKey = try {
-            val hex = "0123456789abcdef"
-            val digest = java.security.MessageDigest.getInstance("MD5")
-                .digest(androidId.toByteArray())
-            val sb = StringBuilder(32)
-            for (b in digest) {
-                val v = b.toInt() and 0xFF
-                sb.append(hex[v ushr 4])
-                sb.append(hex[v and 0x0F])
-            }
-            sb.toString()  // ровно 32 ASCII-символа
+            val sha256 = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(androidId.toByteArray())          // ровно 32 байта
+            android.util.Base64.encodeToString(sha256, android.util.Base64.NO_WRAP)
+            // 44 символа base64 с паддингом "==" → Go: 44/4*3 = 33-2 = 32 байта ✓
         } catch (_: Throwable) {
-            "0".repeat(32)
+            android.util.Base64.encodeToString(ByteArray(32), android.util.Base64.NO_WRAP)
         }
         libCls.methods.firstOrNull { it.name == "initCoreEnv" }?.let { m ->
             runCatching {
