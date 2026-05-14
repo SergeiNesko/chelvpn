@@ -38,9 +38,11 @@ class MainViewModel : ViewModel() {
 
     private val subManager = SubscriptionManager()
     private lateinit var prefs: Prefs
+    private var filesDir: String = ""
 
     fun init(context: Context) {
         prefs = Prefs(context)
+        filesDir = context.filesDir.absolutePath
         // Читаем checkpoint напрямую из SharedPreferences — не ждём сервис
         val sp = context.getSharedPreferences(ChelVpnService.PREFS_DEBUG, MODE_PRIVATE)
         val lastStep = sp.getString(ChelVpnService.KEY_STEP, null)
@@ -139,41 +141,47 @@ class MainViewModel : ViewModel() {
 
     private fun startPingMonitor() {
         viewModelScope.launch {
-            delay(2000) // дать VPN стабилизироваться
+            delay(3000)
             while (_uiState.value.isConnected) {
                 val ping = measurePing()
                 _uiState.value = _uiState.value.copy(pingMs = ping)
+                if (ping < 0) {
+                    val logTail = readXrayLogTail()
+                    setMessage("Прокси недоступен. Проверь конфиг.$logTail")
+                } else {
+                    _uiState.value = _uiState.value.copy(message = "")
+                }
                 delay(10_000)
             }
             _uiState.value = _uiState.value.copy(pingMs = -1)
         }
     }
 
+    private fun readXrayLogTail(): String = try {
+        val f = java.io.File(filesDir, "xray.log")
+        if (f.exists() && f.length() > 0) {
+            val tail = f.readText().trimEnd().takeLast(300)
+            if (tail.isNotEmpty()) "\n\nXray log:\n$tail" else ""
+        } else ""
+    } catch (_: Throwable) { "" }
+
+    // Реальный тест через SOCKS5: HTTP GET через xray-прокси.
+    // Возвращает задержку в мс или -1 если xray не может достучаться до сервера.
     private suspend fun measurePing(): Int = withContext(Dispatchers.IO) {
         try {
             val start = System.currentTimeMillis()
-            // Подключаемся через SOCKS5-прокси xray (127.0.0.1:10808) к 1.1.1.1:443
-            // чтобы пинг отражал реальную задержку через VPN-сервер, а не прямое соединение
-            val socks = java.net.Socket()
-            socks.soTimeout = 5000
-            socks.connect(java.net.InetSocketAddress("127.0.0.1", 10808), 3000)
-            socks.use { s ->
-                val out = s.getOutputStream()
-                val inp = s.getInputStream()
-                // SOCKS5 handshake
-                out.write(byteArrayOf(0x05, 0x01, 0x00))
-                out.flush()
-                val buf = ByteArray(2)
-                inp.read(buf)
-                if (buf[0] != 0x05.toByte() || buf[1] != 0x00.toByte()) return@withContext -1
-                // CONNECT 1.1.1.1:443
-                out.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 1, 1, 1, 1, 0x01, 0xBB.toByte()))
-                out.flush()
-                val rep = ByteArray(10)
-                inp.read(rep)
-                if (rep[1] != 0x00.toByte()) return@withContext -1
-            }
-            (System.currentTimeMillis() - start).toInt()
+            val proxy = java.net.Proxy(
+                java.net.Proxy.Type.SOCKS,
+                java.net.InetSocketAddress("127.0.0.1", top.chelvp.vpn.vpn.ConfigBuilder.SOCKS_PORT)
+            )
+            val url = java.net.URL("http://connectivitycheck.gstatic.com/generate_204")
+            val conn = url.openConnection(proxy) as java.net.HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.instanceFollowRedirects = false
+            val code = conn.responseCode
+            conn.disconnect()
+            if (code == 204) (System.currentTimeMillis() - start).toInt() else -1
         } catch (_: Exception) { -1 }
     }
 
