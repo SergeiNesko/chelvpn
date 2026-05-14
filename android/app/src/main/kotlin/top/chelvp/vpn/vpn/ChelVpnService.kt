@@ -221,12 +221,22 @@ class ChelVpnService : VpnService() {
                 contentResolver, android.provider.Settings.Secure.ANDROID_ID
             ) ?: ""
         }.getOrDefault("")
+        // joinToString { "%02x".format(byte) } даёт неверный результат для Kotlin Byte ≥ 0x80
+        // (знаковый тип, %02x расширяет до int со знаком → не 2 символа).
+        // Используем явный lookup без format.
         val deviceKey = try {
-            java.security.MessageDigest.getInstance("MD5")
+            val hex = "0123456789abcdef"
+            val digest = java.security.MessageDigest.getInstance("MD5")
                 .digest(androidId.toByteArray())
-                .joinToString("") { "%02x".format(it) }  // 32 hex-символа
+            val sb = StringBuilder(32)
+            for (b in digest) {
+                val v = b.toInt() and 0xFF
+                sb.append(hex[v ushr 4])
+                sb.append(hex[v and 0x0F])
+            }
+            sb.toString()  // ровно 32 ASCII-символа
         } catch (_: Throwable) {
-            androidId.padEnd(32, '0').take(32)
+            "0".repeat(32)
         }
         libCls.methods.firstOrNull { it.name == "initCoreEnv" }?.let { m ->
             runCatching {
