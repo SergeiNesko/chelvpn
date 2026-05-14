@@ -212,23 +212,30 @@ class ChelVpnService : VpnService() {
         step("libv2ray.Class.forName")
         val libCls = Class.forName("libv2ray.Libv2ray")
 
-        // initCoreEnv(assetsPath, deviceId) — v2rayNG передаёт ANDROID_ID как deviceId.
-        // Ранее передавали filesDir как второй аргумент — Go-горутина xray пыталась
-        // использовать путь как device UUID, парсинг падал → SIGABRT через ~50ms.
+        // initCoreEnv(assetsPath, key) — key используется как xudp.BaseKey.
+        // xudp.BaseKey ДОЛЖЕН быть ровно 32 байта (Go panic иначе).
+        // MD5(ANDROID_ID) → 16 байт → 32 hex-символа = 32 байта как Go-строка.
         step("initCoreEnv")
         val androidId = runCatching {
             android.provider.Settings.Secure.getString(
                 contentResolver, android.provider.Settings.Secure.ANDROID_ID
             ) ?: ""
         }.getOrDefault("")
+        val deviceKey = try {
+            java.security.MessageDigest.getInstance("MD5")
+                .digest(androidId.toByteArray())
+                .joinToString("") { "%02x".format(it) }  // 32 hex-символа
+        } catch (_: Throwable) {
+            androidId.padEnd(32, '0').take(32)
+        }
         libCls.methods.firstOrNull { it.name == "initCoreEnv" }?.let { m ->
             runCatching {
                 when (m.parameterTypes.size) {
-                    2    -> m.invoke(null, filesDir.absolutePath, androidId)
+                    2    -> m.invoke(null, filesDir.absolutePath, deviceKey)
                     1    -> m.invoke(null, filesDir.absolutePath)
                     else -> Unit
                 }
-            }.onSuccess { Log.d(TAG, "initCoreEnv OK, id=$androidId") }
+            }.onSuccess { Log.d(TAG, "initCoreEnv OK, key[0..7]=${deviceKey.take(8)}") }
              .onFailure { Log.w(TAG, "initCoreEnv: ${it.message}") }
         }
 
