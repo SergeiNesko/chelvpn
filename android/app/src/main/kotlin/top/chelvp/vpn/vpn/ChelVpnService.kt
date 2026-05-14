@@ -226,13 +226,24 @@ class ChelVpnService : VpnService() {
         //   ANDROID_ID 16 символов → base64 → 12 байт → "len 12"
         //   MD5-hex 32 символа     → base64 → 24 байта → "len 24"
         // Нужно: base64(SHA-256(androidId)) → Go декодирует → 32 байта → len == 32 ✓
+        // Go использует base64.RawURLEncoding (URL-safe, без паддинга).
+        // Доказательство: "...s+aJL..." → останавливается на '+' → 4 группы = 12 байт.
+        // SHA-256(androidId) = 32 байта → RawURL-base64 = 43 символа.
+        // Go: RawURLEncoding.Decode(43 chars) → 32 байта → len == 32 ✓
         val deviceKey = try {
             val sha256 = java.security.MessageDigest.getInstance("SHA-256")
-                .digest(androidId.toByteArray())          // ровно 32 байта
-            android.util.Base64.encodeToString(sha256, android.util.Base64.NO_WRAP)
-            // 44 символа base64 с паддингом "==" → Go: 44/4*3 = 33-2 = 32 байта ✓
+                .digest(androidId.toByteArray())
+            android.util.Base64.encodeToString(
+                sha256,
+                android.util.Base64.NO_WRAP or
+                android.util.Base64.URL_SAFE or
+                android.util.Base64.NO_PADDING
+            )
         } catch (_: Throwable) {
-            android.util.Base64.encodeToString(ByteArray(32), android.util.Base64.NO_WRAP)
+            android.util.Base64.encodeToString(
+                ByteArray(32),
+                android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING
+            )
         }
         libCls.methods.firstOrNull { it.name == "initCoreEnv" }?.let { m ->
             runCatching {
