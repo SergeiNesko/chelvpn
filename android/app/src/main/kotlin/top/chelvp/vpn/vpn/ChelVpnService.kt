@@ -186,8 +186,8 @@ class ChelVpnService : VpnService() {
 
     private fun buildTun(): ParcelFileDescriptor? = Builder()
         .setSession("ChelVPN")
-        .setMtu(1280)
-        .addAddress("10.0.0.2", 24)
+        .setMtu(9000)
+        .addAddress("26.26.26.1", 24)
         .addRoute("0.0.0.0", 0)
         .addRoute("::", 0)
         .addDnsServer("1.1.1.1")
