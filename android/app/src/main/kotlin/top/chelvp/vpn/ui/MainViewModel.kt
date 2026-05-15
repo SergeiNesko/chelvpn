@@ -29,6 +29,7 @@ data class MainUiState(
     val activeServer: ServerConfig? = null,
     val pingMs: Int = -1,
     val lastError: String = "",
+    val xrayLog: String = "",
 )
 
 class MainViewModel : ViewModel() {
@@ -155,6 +156,28 @@ class MainViewModel : ViewModel() {
             }
             _uiState.value = _uiState.value.copy(pingMs = -1)
         }
+    }
+
+    fun loadXrayLog() {
+        val log = buildString {
+            for (name in listOf("xray.log", "xray_access.log", "xray_panic.log")) {
+                try {
+                    val f = java.io.File(filesDir, name)
+                    if (f.exists() && f.length() > 0) {
+                        appendLine("=== $name ===")
+                        appendLine(f.readText().trimEnd().takeLast(2000))
+                        appendLine()
+                    }
+                } catch (_: Throwable) {}
+            }
+        }.trim()
+        _uiState.value = _uiState.value.copy(
+            xrayLog = log.ifEmpty { "(логи пусты)" }
+        )
+    }
+
+    fun clearXrayLog() {
+        _uiState.value = _uiState.value.copy(xrayLog = "")
     }
 
     private fun readXrayLogTail(): String = try {

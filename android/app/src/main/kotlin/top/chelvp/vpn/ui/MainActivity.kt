@@ -14,7 +14,9 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
@@ -65,6 +67,8 @@ class MainActivity : ComponentActivity() {
                     onResetClick = { vm.resetConfig(this) },
                     onPasteClick = { handlePaste() },
                     onQrClick = { qrLauncher.launch(Intent(this, QrScanActivity::class.java)) },
+                    onShowLogClick = { vm.loadXrayLog() },
+                    onDismissLog = { vm.clearXrayLog() },
                 )
             }
         }
@@ -113,9 +117,24 @@ fun MainScreen(
     onResetClick: () -> Unit,
     onPasteClick: () -> Unit,
     onQrClick: () -> Unit,
+    onShowLogClick: () -> Unit,
+    onDismissLog: () -> Unit,
 ) {
     val bgTop = Color(0xFF0D1B2A)
     val bgBot = Color(0xFF1B2838)
+
+    if (state.xrayLog.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = onDismissLog,
+            title = { Text("Xray лог", fontWeight = FontWeight.Bold) },
+            text = {
+                Box(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    Text(state.xrayLog, fontSize = 10.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                }
+            },
+            confirmButton = { TextButton(onClick = onDismissLog) { Text("Закрыть") } }
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -224,6 +243,14 @@ fun MainScreen(
             if (state.message.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 Text(state.message, color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
+            }
+
+            Spacer(Modifier.height(16.dp))
+            TextButton(
+                onClick = onShowLogClick,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.White.copy(alpha = 0.35f))
+            ) {
+                Text("📋 xray лог", fontSize = 12.sp)
             }
         }
     }
