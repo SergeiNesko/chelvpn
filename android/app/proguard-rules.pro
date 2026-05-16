@@ -2,6 +2,9 @@
 -keep class libv2ray.** { *; }
 -dontwarn libv2ray.**
 
+# hev-socks5-tunnel JNI stub — libhevtun.so does FindClass + RegisterNatives on this class
+-keep class com.v2ray.ang.service.TProxyService { *; }
+
 # Keep our VPN service intact
 -keep class top.chelvp.vpn.vpn.** { *; }
 

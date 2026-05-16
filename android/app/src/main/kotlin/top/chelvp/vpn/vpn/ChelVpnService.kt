@@ -41,6 +41,7 @@ class ChelVpnService : VpnService() {
     private var tunFd: ParcelFileDescriptor? = null
     private var v2rayPoint: Any? = null
     private var usedNewApi = false
+    private var tProxy: com.v2ray.ang.service.TProxyService? = null
 
     // ── Lifecycle ─────────────────────────────────────────────
 
@@ -136,6 +137,9 @@ class ChelVpnService : VpnService() {
             step("startXray")
             startXray(configFile.absolutePath, enrichedConfig, tunFd!!.fd)
 
+            step("startHev")
+            startHevTunnel(tunFd!!.fd)
+
             // "running" — чекпоинт остаётся на диске, чтобы async-краш был виден
             step("running")
             isRunning = true
@@ -157,6 +161,7 @@ class ChelVpnService : VpnService() {
         getSharedPreferences(PREFS_DEBUG, Context.MODE_PRIVATE)
             .edit().remove(KEY_CTRL_METHODS).apply()
         try { stopXray() } catch (_: Throwable) {}
+        stopHevTunnel()
         try { tunFd?.close() } catch (_: Throwable) {}
         tunFd = null
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -194,6 +199,52 @@ class ChelVpnService : VpnService() {
         .addDnsServer("8.8.8.8")
         .addDisallowedApplication(packageName)
         .establish()
+
+    // ── Hev-socks5-tunnel TUN bridge ─────────────────────────
+    // hev reads raw IP packets from the TUN fd and forwards each TCP/UDP
+    // connection through xray's SOCKS5 inbound (127.0.0.1:10808).
+    // Without this bridge, other apps receive no internet despite xray running,
+    // because startLoop() in AndroidLibXrayLite does not include a built-in
+    // gVisor TUN stack — it only starts xray-core with SOCKS5/HTTP inbounds.
+
+    private fun startHevTunnel(fd: Int) {
+        if (!com.v2ray.ang.service.TProxyService.hevAvailable) {
+            Log.w(TAG, "libhevtun not available — TUN bridge disabled, other apps won't get internet")
+            return
+        }
+        val configFile = java.io.File(filesDir, "hev_config.yaml")
+        configFile.writeText(buildHevYaml())
+        val tp = com.v2ray.ang.service.TProxyService().also { tProxy = it }
+        try {
+            tp.TProxyStartService(configFile.absolutePath, fd)
+            Log.i(TAG, "hev TUN bridge started (fd=$fd → socks5 :${ConfigBuilder.SOCKS_PORT})")
+        } catch (e: Throwable) {
+            Log.e(TAG, "hev start failed: ${e.message}")
+        }
+    }
+
+    private fun stopHevTunnel() {
+        tProxy?.let { tp ->
+            try { tp.TProxyStopService() } catch (_: Throwable) {}
+            tProxy = null
+        }
+    }
+
+    private fun buildHevYaml(): String = """
+tunnel:
+  name: tun0
+  mtu: 9000
+socks5:
+  port: ${ConfigBuilder.SOCKS_PORT}
+  address: '127.0.0.1'
+  udp: 'udp'
+misc:
+  task-stack-size: 81920
+  connect-timeout: 5000
+  read-write-timeout: 60000
+  log-file: stderr
+  log-level: warn
+""".trimIndent()
 
     // ── Xray via libv2ray (reflection) ────────────────────────
     //
