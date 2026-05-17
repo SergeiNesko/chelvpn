@@ -11,7 +11,7 @@ package com.v2ray.ang.service
 class TProxyService {
     companion object {
         val hevAvailable: Boolean = try {
-            System.loadLibrary("hevtun")
+            System.loadLibrary("hev-socks5-tunnel")
             true
         } catch (_: Throwable) { false }
     }
