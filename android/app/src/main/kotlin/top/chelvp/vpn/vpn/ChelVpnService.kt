@@ -277,19 +277,29 @@ misc:
             throw IllegalStateException(lastError)
         }
         val proxy = ByeDpiProxy().also { byeDpiProxy = it }
-        byeDpiThread = Thread(null, {
+        val thread = Thread(null, {
             val code = proxy.startProxy()
             Log.i(TAG, "byedpi exited with code $code")
         }, "byedpi-proxy").also {
             it.isDaemon = true
             it.start()
         }
-        if (!waitForPort(ByeDpiProxy.PORT, 3000)) {
-            lastError = "byedpi не запустился (порт ${ByeDpiProxy.PORT} не открылся за 3с)"
+        byeDpiThread = thread
+
+        // Wait up to 3 s for port to open. In Android VPN context on some devices,
+        // loopback Socket checks can be unreliable — so if the thread is still alive
+        // we proceed even on timeout rather than incorrectly aborting the start.
+        val portOpen = waitForPort(ByeDpiProxy.PORT, 3000)
+        if (!thread.isAlive) {
+            lastError = "byedpi не запустился (завершился досрочно)"
             Log.e(TAG, lastError)
             throw IllegalStateException(lastError)
         }
-        Log.i(TAG, "byedpi DPI-bypass proxy ready on :${ByeDpiProxy.PORT}")
+        if (!portOpen) {
+            Log.w(TAG, "byedpi port check timed out — thread alive, proceeding")
+        } else {
+            Log.i(TAG, "byedpi DPI-bypass proxy ready on :${ByeDpiProxy.PORT}")
+        }
     }
 
     private fun waitForPort(port: Int, timeoutMs: Long): Boolean {

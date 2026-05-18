@@ -14,20 +14,23 @@ class ByeDpiProxy {
         // Must not conflict with xray's ports (10808/10809).
         const val PORT = 10810
 
-        // OOB desync matching user's working ByeByeDPI v1.7.2 settings.
-        // -o 1            OOB byte at position 1 of ClientHello (confuses SNI-based DPI)
-        // -t 8            fake packet TTL=8: reaches ISP DPI (3-5 hops) but not the real server.
-        //                 Matches user's confirmed-working ByeByeDPI config (fake_ttl=8).
-        // -n www.iana.org fake SNI in the accompanying fake TLS record
-        // UDP fakes (-a) are intentionally omitted: byedpi receives ALL UDP via hev including
-        // DNS queries (port 53). Sending fake UDP to DNS servers causes FORMERR responses and
-        // breaks DNS. TCP OOB desync is sufficient for HTTPS (Instagram/YouTube HTTP/2).
-        // argv[0] is the program name — getopt skips it (curr_optind=1 in parse_args).
+        // OOB desync args matching ByeByeDPI v1.7.5 UI defaults for OOB method.
+        // -i 127.0.0.1  explicit loopback bind (avoids 0.0.0.0 binding ambiguity in VPN)
+        // -Kt,h         apply desync to HTTPS (TLS) and HTTP traffic only
+        // -o 1          OOB byte at position 1 of ClientHello (confuses SNI-based DPI)
+        // -ea           OOB char 'a' (ASCII 97) — same as ByeByeDPI default oob_char
+        // -An           accept group terminator — required by ciadpi arg parser
+        // UDP fakes (-Ku -a1) omitted: byedpi receives ALL UDP via hev including DNS
+        // queries (port 53) → fake UDP breaks DNS → no internet. TCP OOB only.
+        // -t/-n omitted: in newer byedpi (ciadpi) these only affect DESYNC_FAKE, not OOB.
         private val DEFAULT_ARGS = arrayOf(
-            "byedpi", "-p", PORT.toString(),
+            "ciadpi",
+            "-i", "127.0.0.1",
+            "-p", PORT.toString(),
+            "-Kt,h",
             "-o", "1",
-            "-t", "8",
-            "-n", "www.iana.org",
+            "-ea",
+            "-An",
         )
 
         val isAvailable: Boolean = try {
