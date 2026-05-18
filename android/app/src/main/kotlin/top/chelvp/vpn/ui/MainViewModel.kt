@@ -165,11 +165,17 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             delay(3000)
             while (_uiState.value.isConnected) {
-                val ping = measurePing()
+                val mode = prefs.vpnMode
+                val ping = if (mode == VpnMode.DPI_BYPASS) measurePingDirect() else measurePing()
                 _uiState.value = _uiState.value.copy(pingMs = ping)
                 if (ping < 0) {
-                    val logTail = readXrayLogTail()
-                    setMessage("Прокси недоступен. Проверь конфиг.$logTail")
+                    val hint = if (mode == VpnMode.DPI_BYPASS)
+                        "DPI bypass не работает. Попробуй другой режим."
+                    else {
+                        val logTail = readXrayLogTail()
+                        "Прокси недоступен. Проверь конфиг.$logTail"
+                    }
+                    setMessage(hint)
                 } else {
                     _uiState.value = _uiState.value.copy(message = "")
                 }
@@ -209,14 +215,34 @@ class MainViewModel : ViewModel() {
         } else ""
     } catch (_: Throwable) { "" }
 
-    // Реальный тест через SOCKS5: HTTP GET через xray-прокси.
-    // Возвращает задержку в мс или -1 если xray не может достучаться до сервера.
+    // Full VPN: тест через SOCKS5 xray (:10808).
     private suspend fun measurePing(): Int = withContext(Dispatchers.IO) {
         try {
             val start = System.currentTimeMillis()
             val proxy = java.net.Proxy(
                 java.net.Proxy.Type.SOCKS,
                 java.net.InetSocketAddress("127.0.0.1", top.chelvp.vpn.vpn.ConfigBuilder.SOCKS_PORT)
+            )
+            val url = java.net.URL("http://connectivitycheck.gstatic.com/generate_204")
+            val conn = url.openConnection(proxy) as java.net.HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.instanceFollowRedirects = false
+            val code = conn.responseCode
+            conn.disconnect()
+            if (code == 204) (System.currentTimeMillis() - start).toInt() else -1
+        } catch (_: Exception) { -1 }
+    }
+
+    // DPI bypass: тест через byedpi SOCKS5 (:10810).
+    // Наш процесс не в TUN (он не в allowedApps), поэтому
+    // подключаемся к byedpi напрямую как к локальному SOCKS5-прокси.
+    private suspend fun measurePingDirect(): Int = withContext(Dispatchers.IO) {
+        try {
+            val start = System.currentTimeMillis()
+            val proxy = java.net.Proxy(
+                java.net.Proxy.Type.SOCKS,
+                java.net.InetSocketAddress("127.0.0.1", top.chelvp.vpn.vpn.ByeDpiProxy.PORT)
             )
             val url = java.net.URL("http://connectivitycheck.gstatic.com/generate_204")
             val conn = url.openConnection(proxy) as java.net.HttpURLConnection
