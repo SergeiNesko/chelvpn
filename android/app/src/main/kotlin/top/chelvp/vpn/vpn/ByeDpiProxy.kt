@@ -14,20 +14,20 @@ class ByeDpiProxy {
         // Must not conflict with xray's ports (10808/10809).
         const val PORT = 10810
 
-        // OOB desync from user's working ByeByeDPI v1.7.2 settings.
+        // OOB desync matching user's working ByeByeDPI v1.7.2 settings.
         // -o 1            OOB byte at position 1 of ClientHello (confuses SNI-based DPI)
-        // -t 2            fake packet TTL=2: dies at ISP's DPI equipment (1-2 hops away)
-        //                 but never reaches DNS servers (1.1.1.1 / 8.8.8.8 = 5+ hops) →
-        //                 DNS queries are not corrupted despite UDP fake being enabled
+        // -t 8            fake packet TTL=8: reaches ISP DPI (3-5 hops) but not the real server.
+        //                 Matches user's confirmed-working ByeByeDPI config (fake_ttl=8).
         // -n www.iana.org fake SNI in the accompanying fake TLS record
-        // -a 1            1 UDP fake packet for QUIC (YouTube HTTP/3)
+        // UDP fakes (-a) are intentionally omitted: byedpi receives ALL UDP via hev including
+        // DNS queries (port 53). Sending fake UDP to DNS servers causes FORMERR responses and
+        // breaks DNS. TCP OOB desync is sufficient for HTTPS (Instagram/YouTube HTTP/2).
         // argv[0] is the program name — getopt skips it (curr_optind=1 in parse_args).
         private val DEFAULT_ARGS = arrayOf(
             "byedpi", "-p", PORT.toString(),
             "-o", "1",
-            "-t", "2",
+            "-t", "8",
             "-n", "www.iana.org",
-            "-a", "1",
         )
 
         val isAvailable: Boolean = try {

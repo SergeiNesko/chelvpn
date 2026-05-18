@@ -5,14 +5,32 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 class SubscriptionManager {
 
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
+    // Accept all SSL certificates — x-ui panels commonly use self-signed certs.
+    private val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+    })
+
+    private val http = run {
+        val sslCtx = SSLContext.getInstance("TLS").apply {
+            init(null, trustAllCerts, java.security.SecureRandom())
+        }
+        OkHttpClient.Builder()
+            .sslSocketFactory(sslCtx.socketFactory, trustAllCerts[0] as X509TrustManager)
+            .hostnameVerifier { _, _ -> true }
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
 
     /**
      * Загружает подписку по URL, возвращает список серверов.
@@ -21,7 +39,10 @@ class SubscriptionManager {
     suspend fun fetchServers(url: String): Result<List<ServerConfig>> = withContext(Dispatchers.IO) {
         runCatching {
             val req = Request.Builder().url(url).build()
-            val body = http.newCall(req).execute().use { it.body?.string() ?: "" }
+            val (code, body) = http.newCall(req).execute().use { resp ->
+                resp.code to (resp.body?.string() ?: "")
+            }
+            if (body.isEmpty()) error("Сервер вернул пустой ответ (HTTP $code)")
             parseSubscriptionContent(body)
         }
     }
