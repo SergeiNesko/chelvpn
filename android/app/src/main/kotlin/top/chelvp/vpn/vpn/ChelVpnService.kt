@@ -122,7 +122,7 @@ class ChelVpnService : VpnService() {
                 step("startByeDpi")
                 startByeDpiProxy()
                 step("startHev")
-                startHevTunnel(tunFd!!.fd, ByeDpiProxy.PORT)
+                startHevTunnel(tunFd!!.fd, ByeDpiProxy.PORT, VpnMode.DPI_BYPASS)
             } else {
                 step("copyGeoAssets")
                 copyGeoAssets()
@@ -199,10 +199,11 @@ class ChelVpnService : VpnService() {
             .addAddress("26.26.26.1", 24)
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
-            .addDnsServer("1.1.1.1")
-            .addDnsServer("8.8.8.8")
 
         if (mode == VpnMode.DPI_BYPASS) {
+            // 26.26.26.2 is intercepted by hev's built-in DNS resolver (see buildHevYaml),
+            // so DNS queries never reach byedpi and are not affected by UDP fake packets.
+            builder.addDnsServer("26.26.26.2")
             // Only route selected apps through the TUN — everything else goes normally
             for (pkg in listOf(
                 "com.instagram.android",
@@ -213,6 +214,8 @@ class ChelVpnService : VpnService() {
                     .onFailure { Log.w(TAG, "addAllowedApplication($pkg) failed: ${it.message}") }
             }
         } else {
+            builder.addDnsServer("1.1.1.1")
+            builder.addDnsServer("8.8.8.8")
             // All apps except ours go through TUN (prevents routing loop)
             builder.addDisallowedApplication(packageName)
         }
@@ -227,17 +230,17 @@ class ChelVpnService : VpnService() {
     // because startLoop() in AndroidLibXrayLite does not include a built-in
     // gVisor TUN stack — it only starts xray-core with SOCKS5/HTTP inbounds.
 
-    private fun startHevTunnel(fd: Int, socksPort: Int) {
+    private fun startHevTunnel(fd: Int, socksPort: Int, mode: VpnMode = VpnMode.FULL_VPN) {
         if (!com.v2ray.ang.service.TProxyService.hevAvailable) {
             Log.w(TAG, "libhevtun not available — TUN bridge disabled")
             return
         }
         val configFile = java.io.File(filesDir, "hev_config.yaml")
-        configFile.writeText(buildHevYaml(socksPort))
+        configFile.writeText(buildHevYaml(socksPort, mode))
         val tp = com.v2ray.ang.service.TProxyService().also { tProxy = it }
         try {
             tp.TProxyStartService(configFile.absolutePath, fd)
-            Log.i(TAG, "hev TUN bridge started (fd=$fd → socks5 :$socksPort)")
+            Log.i(TAG, "hev TUN bridge started (fd=$fd → socks5 :$socksPort, mode=$mode)")
         } catch (e: Throwable) {
             Log.e(TAG, "hev start failed: ${e.message}")
         }
@@ -250,7 +253,17 @@ class ChelVpnService : VpnService() {
         }
     }
 
-    private fun buildHevYaml(socksPort: Int): String = """
+    private fun buildHevYaml(socksPort: Int, mode: VpnMode = VpnMode.FULL_VPN): String {
+        // In DPI_BYPASS mode hev resolves DNS directly (26.26.26.2 → 8.8.8.8),
+        // so DNS never reaches byedpi and isn't corrupted by UDP fake packets.
+        // QUIC (non-DNS UDP) still goes through SOCKS5 UDP-ASSOCIATE → byedpi.
+        val dnsSection = if (mode == VpnMode.DPI_BYPASS) """
+dns:
+  port: 53
+  address: '26.26.26.2'
+  upstream: 'udp://8.8.8.8'
+""" else ""
+        return """
 tunnel:
   name: tun0
   mtu: 9000
@@ -258,13 +271,14 @@ socks5:
   port: $socksPort
   address: '127.0.0.1'
   udp: 'udp'
-misc:
+${dnsSection}misc:
   task-stack-size: 81920
   connect-timeout: 5000
   read-write-timeout: 60000
   log-file: stderr
   log-level: warn
 """.trimIndent()
+    }
 
     // ── ByeDpi DPI-bypass proxy ───────────────────────────────
     // jniStartProxy() blocks until the proxy exits — run in a daemon thread.
@@ -284,9 +298,25 @@ misc:
             it.isDaemon = true
             it.start()
         }
-        // Give byedpi a moment to bind its socket before hev connects to it
-        Thread.sleep(200)
-        Log.i(TAG, "byedpi DPI-bypass proxy started on :${ByeDpiProxy.PORT}")
+        if (!waitForPort(ByeDpiProxy.PORT, 3000)) {
+            lastError = "byedpi не запустился (порт ${ByeDpiProxy.PORT} не открылся за 3с)"
+            Log.e(TAG, lastError)
+            throw IllegalStateException(lastError)
+        }
+        Log.i(TAG, "byedpi DPI-bypass proxy ready on :${ByeDpiProxy.PORT}")
+    }
+
+    private fun waitForPort(port: Int, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                java.net.Socket("127.0.0.1", port).close()
+                return true
+            } catch (_: Exception) {
+                Thread.sleep(50)
+            }
+        }
+        return false
     }
 
     private fun stopByeDpiProxy() {

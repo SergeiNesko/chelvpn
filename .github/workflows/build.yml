@@ -53,18 +53,26 @@ jobs:
 
       - name: Build libbyedpi (DPI bypass, ndk-build)
         run: |
-          # Clone byedpi pinned to the commit used by ByeByeDPI v1.7.5
-          git clone https://github.com/hufrea/byedpi.git byedpi_src
-          git -C byedpi_src checkout ba532298de7b28cfe854aea83d061369d13ca290
+          # Clone ByeByeDPI v1.7.5 with its byedpi submodule.
+          # The submodule (hufrea/byedpi, newer commit) supports -o/-t/-n flags
+          # required for OOB desync method.
+          git clone --recurse-submodules --depth=1 --shallow-submodules \
+            --branch v.1.7.5 \
+            https://github.com/romanvht/ByeByeDPI.git byebyedpi_src
 
           mkdir -p byedpi_build/jni
 
-          # byedpi source (exclude Windows-only file)
-          for f in byedpi_src/*.c byedpi_src/*.h; do
+          # byedpi source from ByeByeDPI submodule (exclude Windows-only files)
+          for f in byebyedpi_src/app/src/main/cpp/byedpi/*.c \
+                   byebyedpi_src/app/src/main/cpp/byedpi/*.h; do
+            [ -f "$f" ] || continue
             fname=$(basename "$f")
             [ "$fname" = "win_service.c" ] || [ "$fname" = "win_service.h" ] && continue
             cp "$f" byedpi_build/jni/
           done
+
+          echo "=== byedpi source files ==="
+          ls byedpi_build/jni/*.c
 
           # Our JNI wrapper (native-lib.c + main.h)
           cp custom/android/app/src/main/cpp/native-lib.c byedpi_build/jni/
@@ -72,11 +80,13 @@ jobs:
 
           cat > byedpi_build/jni/Android.mk << 'ANDROIDMK'
           LOCAL_PATH := $(call my-dir)
+          MY_C := $(wildcard $(LOCAL_PATH)/*.c)
+          MY_C := $(filter-out %/win_service.c, $(MY_C))
+          MY_C := $(MY_C:$(LOCAL_PATH)/%=%)
           include $(CLEAR_VARS)
           LOCAL_MODULE     := byedpi
           LOCAL_C_INCLUDES := $(LOCAL_PATH)
-          LOCAL_SRC_FILES  := \
-              conev.c desync.c extend.c main.c mpool.c packets.c proxy.c native-lib.c
+          LOCAL_SRC_FILES  := $(MY_C)
           LOCAL_CFLAGS     := -std=c99 -O2 -Wno-unused -Wno-unused-parameter -DANDROID_APP
           LOCAL_LDLIBS     := -llog -latomic
           include $(BUILD_SHARED_LIBRARY)
@@ -220,7 +230,7 @@ jobs:
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         with:
           tag_name: v${{ env.V2RAYNG_VERSION }}-chelvpn
           name: ChelVPN ${{ env.V2RAYNG_VERSION }}
