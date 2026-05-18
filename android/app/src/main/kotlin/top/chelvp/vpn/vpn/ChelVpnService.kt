@@ -122,7 +122,7 @@ class ChelVpnService : VpnService() {
                 step("startByeDpi")
                 startByeDpiProxy()
                 step("startHev")
-                startHevTunnel(tunFd!!.fd, ByeDpiProxy.PORT, VpnMode.DPI_BYPASS)
+                startHevTunnel(tunFd!!.fd, ByeDpiProxy.PORT)
             } else {
                 step("copyGeoAssets")
                 copyGeoAssets()
@@ -199,11 +199,10 @@ class ChelVpnService : VpnService() {
             .addAddress("26.26.26.1", 24)
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
+            .addDnsServer("1.1.1.1")
+            .addDnsServer("8.8.8.8")
 
         if (mode == VpnMode.DPI_BYPASS) {
-            // 26.26.26.2 is intercepted by hev's built-in DNS resolver (see buildHevYaml),
-            // so DNS queries never reach byedpi and are not affected by UDP fake packets.
-            builder.addDnsServer("26.26.26.2")
             // Only route selected apps through the TUN — everything else goes normally
             for (pkg in listOf(
                 "com.instagram.android",
@@ -214,8 +213,6 @@ class ChelVpnService : VpnService() {
                     .onFailure { Log.w(TAG, "addAllowedApplication($pkg) failed: ${it.message}") }
             }
         } else {
-            builder.addDnsServer("1.1.1.1")
-            builder.addDnsServer("8.8.8.8")
             // All apps except ours go through TUN (prevents routing loop)
             builder.addDisallowedApplication(packageName)
         }
@@ -230,17 +227,17 @@ class ChelVpnService : VpnService() {
     // because startLoop() in AndroidLibXrayLite does not include a built-in
     // gVisor TUN stack — it only starts xray-core with SOCKS5/HTTP inbounds.
 
-    private fun startHevTunnel(fd: Int, socksPort: Int, mode: VpnMode = VpnMode.FULL_VPN) {
+    private fun startHevTunnel(fd: Int, socksPort: Int) {
         if (!com.v2ray.ang.service.TProxyService.hevAvailable) {
             Log.w(TAG, "libhevtun not available — TUN bridge disabled")
             return
         }
         val configFile = java.io.File(filesDir, "hev_config.yaml")
-        configFile.writeText(buildHevYaml(socksPort, mode))
+        configFile.writeText(buildHevYaml(socksPort))
         val tp = com.v2ray.ang.service.TProxyService().also { tProxy = it }
         try {
             tp.TProxyStartService(configFile.absolutePath, fd)
-            Log.i(TAG, "hev TUN bridge started (fd=$fd → socks5 :$socksPort, mode=$mode)")
+            Log.i(TAG, "hev TUN bridge started (fd=$fd → socks5 :$socksPort)")
         } catch (e: Throwable) {
             Log.e(TAG, "hev start failed: ${e.message}")
         }
@@ -253,17 +250,7 @@ class ChelVpnService : VpnService() {
         }
     }
 
-    private fun buildHevYaml(socksPort: Int, mode: VpnMode = VpnMode.FULL_VPN): String {
-        // In DPI_BYPASS mode hev resolves DNS directly (26.26.26.2 → 8.8.8.8),
-        // so DNS never reaches byedpi and isn't corrupted by UDP fake packets.
-        // QUIC (non-DNS UDP) still goes through SOCKS5 UDP-ASSOCIATE → byedpi.
-        val dnsSection = if (mode == VpnMode.DPI_BYPASS) """
-dns:
-  port: 53
-  address: '26.26.26.2'
-  upstream: 'udp://8.8.8.8'
-""" else ""
-        return """
+    private fun buildHevYaml(socksPort: Int): String = """
 tunnel:
   name: tun0
   mtu: 9000
@@ -271,14 +258,13 @@ socks5:
   port: $socksPort
   address: '127.0.0.1'
   udp: 'udp'
-${dnsSection}misc:
+misc:
   task-stack-size: 81920
   connect-timeout: 5000
   read-write-timeout: 60000
   log-file: stderr
   log-level: warn
 """.trimIndent()
-    }
 
     // ── ByeDpi DPI-bypass proxy ───────────────────────────────
     // jniStartProxy() blocks until the proxy exits — run in a daemon thread.
