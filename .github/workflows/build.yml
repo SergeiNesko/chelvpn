@@ -39,7 +39,7 @@ jobs:
         with:
           log-accepted-android-sdk-licenses: false
           cmdline-tools-version: '13114758'
-          packages: 'platforms;android-35 build-tools;35.0.0 platform-tools cmake;3.22.1'
+          packages: 'platforms;android-35 build-tools;35.0.0 platform-tools'
 
       - name: Install NDK
         run: |
@@ -51,12 +51,56 @@ jobs:
           sed -i '10i\    ndkVersion = "28.2.13676358"' \
             v2rayng/V2rayNG/app/build.gradle.kts
 
-      - name: Clone byedpi source (for CMake build)
+      - name: Build libbyedpi (DPI bypass, ndk-build)
         run: |
-          git clone --depth=1 https://github.com/hufrea/byedpi.git \
-            custom/android/app/src/main/cpp/byedpi
-          echo "=== byedpi files ==="
-          ls custom/android/app/src/main/cpp/byedpi/
+          # Clone byedpi pinned to the commit used by ByeByeDPI v1.7.5
+          git clone https://github.com/hufrea/byedpi.git byedpi_src
+          git -C byedpi_src checkout ba532298de7b28cfe854aea83d061369d13ca290
+
+          mkdir -p byedpi_build/jni
+
+          # byedpi source (exclude Windows-only file)
+          for f in byedpi_src/*.c byedpi_src/*.h; do
+            fname=$(basename "$f")
+            [ "$fname" = "win_service.c" ] || [ "$fname" = "win_service.h" ] && continue
+            cp "$f" byedpi_build/jni/
+          done
+
+          # Our JNI wrapper (native-lib.c + main.h)
+          cp custom/android/app/src/main/cpp/native-lib.c byedpi_build/jni/
+          cp custom/android/app/src/main/cpp/main.h       byedpi_build/jni/
+
+          cat > byedpi_build/jni/Android.mk << 'ANDROIDMK'
+          LOCAL_PATH := $(call my-dir)
+          include $(CLEAR_VARS)
+          LOCAL_MODULE     := byedpi
+          LOCAL_C_INCLUDES := $(LOCAL_PATH)
+          LOCAL_SRC_FILES  := \
+              conev.c desync.c extend.c main.c mpool.c packets.c proxy.c native-lib.c
+          LOCAL_CFLAGS     := -std=c99 -O2 -Wno-unused -Wno-unused-parameter -DANDROID_APP
+          LOCAL_LDLIBS     := -llog -latomic
+          include $(BUILD_SHARED_LIBRARY)
+          ANDROIDMK
+
+          cat > byedpi_build/jni/Application.mk << 'APPMK'
+          APP_ABI      := arm64-v8a armeabi-v7a
+          APP_PLATFORM := android-29
+          APP_STL      := none
+          APPMK
+
+          $NDK_HOME/ndk-build NDK_PROJECT_PATH=byedpi_build \
+            APP_BUILD_SCRIPT=byedpi_build/jni/Android.mk \
+            NDK_APPLICATION_MK=byedpi_build/jni/Application.mk
+
+          echo "=== built byedpi libs ==="
+          find byedpi_build/libs -name "*.so"
+
+          for abi in arm64-v8a armeabi-v7a; do
+            src="byedpi_build/libs/$abi/libbyedpi.so"
+            dst="custom/android/app/src/main/jniLibs/$abi/"
+            mkdir -p "$dst"
+            [ -f "$src" ] && cp "$src" "$dst" && echo "Copied libbyedpi.so → $dst"
+          done
 
       - name: Restore cached libhevtun
         id: cache-libhevtun
