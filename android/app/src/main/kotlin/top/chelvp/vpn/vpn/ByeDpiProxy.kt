@@ -18,7 +18,9 @@ class ByeDpiProxy {
         //   -s 1  split ClientHello at byte 1 (send 1 byte, then rest)
         //   -f 4  fake packet with TTL=4 (reaches DPI, not the server)
         // Effective against SNI-based HTTP/HTTPS blocking.
-        private val DEFAULT_ARGS = arrayOf("-p", PORT.toString(), "-s", "1", "-f", "4")
+        // argv[0] is the program name — getopt skips it (curr_optind=1 in parse_args).
+        // Without it, "-p" lands in argv[0] and is never parsed → byedpi defaults to port 1080.
+        private val DEFAULT_ARGS = arrayOf("byedpi", "-p", PORT.toString(), "-s", "1", "-f", "4")
 
         val isAvailable: Boolean = try {
             System.loadLibrary("byedpi")
