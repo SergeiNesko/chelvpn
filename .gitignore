@@ -10,6 +10,9 @@ android/local.properties
 android/app/src/main/jniLibs/
 android/app/libs/
 
+# byedpi source (cloned at build time in CI)
+android/app/src/main/cpp/byedpi/
+
 # Gradle wrapper jar (copied in CI from v2rayNG)
 android/gradle/wrapper/gradle-wrapper.jar
 

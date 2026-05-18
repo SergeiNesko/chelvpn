@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +33,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.chelvp.vpn.vpn.ChelVpnService
+import top.chelvp.vpn.vpn.VpnMode
 
 class MainActivity : ComponentActivity() {
 
@@ -69,6 +71,7 @@ class MainActivity : ComponentActivity() {
                     onQrClick = { qrLauncher.launch(Intent(this, QrScanActivity::class.java)) },
                     onShowLogClick = { vm.loadXrayLog() },
                     onDismissLog = { vm.clearXrayLog() },
+                    onModeChange = { mode -> vm.setVpnMode(this, mode) },
                 )
             }
         }
@@ -109,6 +112,7 @@ class MainActivity : ComponentActivity() {
 
 // ─── Screen ─────────────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     state: MainUiState,
@@ -119,6 +123,7 @@ fun MainScreen(
     onQrClick: () -> Unit,
     onShowLogClick: () -> Unit,
     onDismissLog: () -> Unit,
+    onModeChange: (VpnMode) -> Unit,
 ) {
     val bgTop = Color(0xFF0D1B2A)
     val bgBot = Color(0xFF1B2838)
@@ -177,7 +182,43 @@ fun MainScreen(
                 )
             }
 
-            Spacer(Modifier.height(48.dp))
+            Spacer(Modifier.height(28.dp))
+
+            // Mode toggle — segmented button
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth(0.92f)) {
+                SegmentedButton(
+                    selected = state.vpnMode == VpnMode.FULL_VPN,
+                    onClick = { onModeChange(VpnMode.FULL_VPN) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = Color(0xFF1565C0),
+                        activeContentColor = Color.White,
+                        inactiveContainerColor = Color.Transparent,
+                        inactiveContentColor = Color.White.copy(alpha = 0.6f),
+                        activeBorderColor = Color(0xFF1565C0),
+                        inactiveBorderColor = Color.White.copy(alpha = 0.25f),
+                    ),
+                ) {
+                    Text("Общий ВПН", fontSize = 13.sp)
+                }
+                SegmentedButton(
+                    selected = state.vpnMode == VpnMode.DPI_BYPASS,
+                    onClick = { onModeChange(VpnMode.DPI_BYPASS) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = Color(0xFF1565C0),
+                        activeContentColor = Color.White,
+                        inactiveContainerColor = Color.Transparent,
+                        inactiveContentColor = Color.White.copy(alpha = 0.6f),
+                        activeBorderColor = Color(0xFF1565C0),
+                        inactiveBorderColor = Color.White.copy(alpha = 0.25f),
+                    ),
+                ) {
+                    Text("YouTube / Instagram", fontSize = 13.sp)
+                }
+            }
+
+            Spacer(Modifier.height(24.dp))
 
             ConnectButton(
                 isConnected = state.isConnected,

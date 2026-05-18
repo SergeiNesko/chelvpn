@@ -17,6 +17,7 @@ import top.chelvp.vpn.subscription.SubscriptionManager
 import top.chelvp.vpn.util.Prefs
 import top.chelvp.vpn.vpn.ChelVpnService
 import top.chelvp.vpn.vpn.ConfigBuilder
+import top.chelvp.vpn.vpn.VpnMode
 import android.content.Context.MODE_PRIVATE
 
 data class MainUiState(
@@ -30,6 +31,7 @@ data class MainUiState(
     val pingMs: Int = -1,
     val lastError: String = "",
     val xrayLog: String = "",
+    val vpnMode: VpnMode = VpnMode.FULL_VPN,
 )
 
 class MainViewModel : ViewModel() {
@@ -76,11 +78,13 @@ class MainViewModel : ViewModel() {
         val server = prefs.activeServer
         val running = ChelVpnService.isRunning
         val wasConnected = _uiState.value.isConnected
+        val mode = prefs.vpnMode
         _uiState.value = MainUiState(
             isConnected = running,
             isConnecting = false,
-            hasServer = server != null,
+            hasServer = server != null || mode == VpnMode.DPI_BYPASS,
             statusText = when {
+                running && mode == VpnMode.DPI_BYPASS -> "DPI bypass · YouTube, Instagram, Discord"
                 running -> "Подключено · ${server?.displayName ?: ""}"
                 server != null -> "Готово · ${server.displayName}"
                 else -> "Подписка не добавлена"
@@ -88,6 +92,7 @@ class MainViewModel : ViewModel() {
             statusColor = if (running) Color(0xFF00C853) else Color(0xFF9E9E9E),
             activeServer = server,
             lastError = ChelVpnService.lastError,
+            vpnMode = mode,
         )
         if (running && !wasConnected) {
             startPingMonitor()
@@ -97,7 +102,9 @@ class MainViewModel : ViewModel() {
     // ── VPN control ───────────────────────────────────────────
 
     fun startVpn(context: Context) {
-        val server = prefs.activeServer ?: run {
+        val mode = prefs.vpnMode
+        val server = prefs.activeServer
+        if (mode == VpnMode.FULL_VPN && server == null) {
             setMessage("Нет сервера. Добавьте подписку.")
             return
         }
@@ -109,7 +116,7 @@ class MainViewModel : ViewModel() {
             message = "",
             lastError = "",
         )
-        val config = ConfigBuilder.build(server)
+        val config = if (mode == VpnMode.FULL_VPN && server != null) ConfigBuilder.build(server) else ""
         val intent = Intent(context, ChelVpnService::class.java).apply {
             action = ChelVpnService.ACTION_START
             putExtra(ChelVpnService.EXTRA_CONFIG, config)
@@ -135,6 +142,20 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             delay(500)
             refreshState()
+        }
+    }
+
+    fun setVpnMode(context: Context, mode: VpnMode) {
+        if (prefs.vpnMode == mode) return
+        prefs.vpnMode = mode
+        _uiState.value = _uiState.value.copy(vpnMode = mode)
+        // Reconnect if currently active so the new TUN config takes effect
+        if (ChelVpnService.isRunning) {
+            stopVpn(context)
+            viewModelScope.launch {
+                delay(800)
+                startVpn(context)
+            }
         }
     }
 

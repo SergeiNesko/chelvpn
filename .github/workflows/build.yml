@@ -39,7 +39,7 @@ jobs:
         with:
           log-accepted-android-sdk-licenses: false
           cmdline-tools-version: '13114758'
-          packages: 'platforms;android-35 build-tools;35.0.0 platform-tools'
+          packages: 'platforms;android-35 build-tools;35.0.0 platform-tools cmake;3.22.1'
 
       - name: Install NDK
         run: |
@@ -50,6 +50,13 @@ jobs:
           # Inject ndkVersion into v2rayNG so compile-hevtun.sh works
           sed -i '10i\    ndkVersion = "28.2.13676358"' \
             v2rayng/V2rayNG/app/build.gradle.kts
+
+      - name: Clone byedpi source (for CMake build)
+        run: |
+          git clone --depth=1 https://github.com/hufrea/byedpi.git \
+            custom/android/app/src/main/cpp/byedpi
+          echo "=== byedpi files ==="
+          ls custom/android/app/src/main/cpp/byedpi/
 
       - name: Restore cached libhevtun
         id: cache-libhevtun

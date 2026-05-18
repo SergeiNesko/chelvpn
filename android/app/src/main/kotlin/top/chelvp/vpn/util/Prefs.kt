@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import top.chelvp.vpn.subscription.ServerConfig
 import top.chelvp.vpn.subscription.parseServerUri
+import top.chelvp.vpn.vpn.VpnMode
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -47,6 +48,14 @@ class Prefs(context: Context) {
         set(v) { sp.edit().putInt(KEY_ACTIVE_IDX, v).apply() }
 
     val activeServer: ServerConfig? get() = servers.getOrNull(activeServerIndex)
+
+    // ── VPN Mode ──────────────────────────────────────────────
+
+    var vpnMode: VpnMode
+        get() = runCatching {
+            VpnMode.valueOf(sp.getString(KEY_VPN_MODE, VpnMode.FULL_VPN.name)!!)
+        }.getOrDefault(VpnMode.FULL_VPN)
+        set(v) { sp.edit().putString(KEY_VPN_MODE, v.name).apply() }
 
     fun addServer(server: ServerConfig) {
         val list = servers.toMutableList()
@@ -92,8 +101,9 @@ class Prefs(context: Context) {
     }
 
     companion object {
-        private const val KEY_SUB_URL   = "sub_url"
-        private const val KEY_SERVERS   = "servers_json"
+        private const val KEY_SUB_URL    = "sub_url"
+        private const val KEY_SERVERS    = "servers_json"
         private const val KEY_ACTIVE_IDX = "active_idx"
+        private const val KEY_VPN_MODE   = "vpn_mode"
     }
 }

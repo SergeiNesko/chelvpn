@@ -5,6 +5,9 @@
 # hev-socks5-tunnel JNI stub — libhevtun.so does FindClass + RegisterNatives on this class
 -keep class com.v2ray.ang.service.TProxyService { *; }
 
+# byedpi JNI — native-lib.c registers methods on this class
+-keep class top.chelvp.vpn.vpn.ByeDpiProxy { *; }
+
 # Keep our VPN service intact
 -keep class top.chelvp.vpn.vpn.** { *; }
 

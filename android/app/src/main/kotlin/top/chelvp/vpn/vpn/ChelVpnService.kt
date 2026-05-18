@@ -15,6 +15,7 @@ import android.system.OsConstants
 import android.util.Log
 import top.chelvp.vpn.R
 import top.chelvp.vpn.ui.MainActivity
+import top.chelvp.vpn.util.Prefs
 import java.io.File
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
@@ -42,6 +43,8 @@ class ChelVpnService : VpnService() {
     private var v2rayPoint: Any? = null
     private var usedNewApi = false
     private var tProxy: com.v2ray.ang.service.TProxyService? = null
+    private var byeDpiProxy: ByeDpiProxy? = null
+    private var byeDpiThread: Thread? = null
 
     // ── Lifecycle ─────────────────────────────────────────────
 
@@ -52,11 +55,7 @@ class ChelVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             ACTION_START -> {
-                val config = intent.getStringExtra(EXTRA_CONFIG) ?: run {
-                    Log.e(TAG, "No config in intent")
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
+                val config = intent.getStringExtra(EXTRA_CONFIG) ?: ""
 
                 val prevStep = getSharedPreferences(PREFS_DEBUG, Context.MODE_PRIVATE)
                     .getString(KEY_STEP, null)
@@ -107,21 +106,10 @@ class ChelVpnService : VpnService() {
 
     private fun start(xrayConfig: String) {
         if (lastError.isEmpty()) lastError = ""
+        val mode = Prefs(this).vpnMode
         try {
-            step("copyGeoAssets")
-            copyGeoAssets()
-
-            step("writeConfig")
-            // Inject xray debug log path for crash diagnostics
-            val xrayLog = File(filesDir, "xray.log")
-            xrayLog.delete()
-            val enrichedConfig = injectLogPath(xrayConfig, xrayLog.absolutePath)
-            val configFile = File(filesDir, "config.json")
-            configFile.writeText(enrichedConfig)
-
-            // TUN строится ДО startXray — новый API startLoop(config, tunFd) требует fd
             step("buildTun")
-            tunFd = buildTun()
+            tunFd = buildTun(mode)
             if (tunFd == null) {
                 clearStep()
                 lastError = "Не удалось создать TUN-интерфейс (нет разрешения VPN?)"
@@ -130,20 +118,34 @@ class ChelVpnService : VpnService() {
                 return
             }
 
-            // Перехватываем stderr (fd=2) в файл — туда Go пишет panic trace.
-            // xray.log содержит только xray-логи; Go panic уходит в stderr и был невидим.
-            redirectStderr()
+            if (mode == VpnMode.DPI_BYPASS) {
+                step("startByeDpi")
+                startByeDpiProxy()
+                step("startHev")
+                startHevTunnel(tunFd!!.fd, ByeDpiProxy.PORT)
+            } else {
+                step("copyGeoAssets")
+                copyGeoAssets()
 
-            step("startXray")
-            startXray(configFile.absolutePath, enrichedConfig, tunFd!!.fd)
+                step("writeConfig")
+                val xrayLog = File(filesDir, "xray.log")
+                xrayLog.delete()
+                val enrichedConfig = injectLogPath(xrayConfig, xrayLog.absolutePath)
+                val configFile = File(filesDir, "config.json")
+                configFile.writeText(enrichedConfig)
 
-            step("startHev")
-            startHevTunnel(tunFd!!.fd)
+                redirectStderr()
 
-            // "running" — чекпоинт остаётся на диске, чтобы async-краш был виден
+                step("startXray")
+                startXray(configFile.absolutePath, enrichedConfig, tunFd!!.fd)
+
+                step("startHev")
+                startHevTunnel(tunFd!!.fd, ConfigBuilder.SOCKS_PORT)
+            }
+
             step("running")
             isRunning = true
-            Log.i(TAG, "VPN started, newApi=$usedNewApi")
+            Log.i(TAG, "VPN started, mode=$mode")
         } catch (e: Throwable) {
             clearStep()
             if (lastError.isEmpty()) {
@@ -162,6 +164,7 @@ class ChelVpnService : VpnService() {
             .edit().remove(KEY_CTRL_METHODS).apply()
         try { stopXray() } catch (_: Throwable) {}
         stopHevTunnel()
+        stopByeDpiProxy()
         try { tunFd?.close() } catch (_: Throwable) {}
         tunFd = null
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -189,16 +192,33 @@ class ChelVpnService : VpnService() {
 
     // ── TUN ───────────────────────────────────────────────────
 
-    private fun buildTun(): ParcelFileDescriptor? = Builder()
-        .setSession("ChelVPN")
-        .setMtu(9000)
-        .addAddress("26.26.26.1", 24)
-        .addRoute("0.0.0.0", 0)
-        .addRoute("::", 0)
-        .addDnsServer("1.1.1.1")
-        .addDnsServer("8.8.8.8")
-        .addDisallowedApplication(packageName)
-        .establish()
+    private fun buildTun(mode: VpnMode): ParcelFileDescriptor? {
+        val builder = Builder()
+            .setSession("ChelVPN")
+            .setMtu(9000)
+            .addAddress("26.26.26.1", 24)
+            .addRoute("0.0.0.0", 0)
+            .addRoute("::", 0)
+            .addDnsServer("1.1.1.1")
+            .addDnsServer("8.8.8.8")
+
+        if (mode == VpnMode.DPI_BYPASS) {
+            // Only route selected apps through the TUN — everything else goes normally
+            for (pkg in listOf(
+                "com.instagram.android",
+                "com.google.android.youtube",
+                "com.discord",
+            )) {
+                runCatching { builder.addAllowedApplication(pkg) }
+                    .onFailure { Log.w(TAG, "addAllowedApplication($pkg) failed: ${it.message}") }
+            }
+        } else {
+            // All apps except ours go through TUN (prevents routing loop)
+            builder.addDisallowedApplication(packageName)
+        }
+
+        return builder.establish()
+    }
 
     // ── Hev-socks5-tunnel TUN bridge ─────────────────────────
     // hev reads raw IP packets from the TUN fd and forwards each TCP/UDP
@@ -207,17 +227,17 @@ class ChelVpnService : VpnService() {
     // because startLoop() in AndroidLibXrayLite does not include a built-in
     // gVisor TUN stack — it only starts xray-core with SOCKS5/HTTP inbounds.
 
-    private fun startHevTunnel(fd: Int) {
+    private fun startHevTunnel(fd: Int, socksPort: Int) {
         if (!com.v2ray.ang.service.TProxyService.hevAvailable) {
-            Log.w(TAG, "libhevtun not available — TUN bridge disabled, other apps won't get internet")
+            Log.w(TAG, "libhevtun not available — TUN bridge disabled")
             return
         }
         val configFile = java.io.File(filesDir, "hev_config.yaml")
-        configFile.writeText(buildHevYaml())
+        configFile.writeText(buildHevYaml(socksPort))
         val tp = com.v2ray.ang.service.TProxyService().also { tProxy = it }
         try {
             tp.TProxyStartService(configFile.absolutePath, fd)
-            Log.i(TAG, "hev TUN bridge started (fd=$fd → socks5 :${ConfigBuilder.SOCKS_PORT})")
+            Log.i(TAG, "hev TUN bridge started (fd=$fd → socks5 :$socksPort)")
         } catch (e: Throwable) {
             Log.e(TAG, "hev start failed: ${e.message}")
         }
@@ -230,12 +250,12 @@ class ChelVpnService : VpnService() {
         }
     }
 
-    private fun buildHevYaml(): String = """
+    private fun buildHevYaml(socksPort: Int): String = """
 tunnel:
   name: tun0
   mtu: 9000
 socks5:
-  port: ${ConfigBuilder.SOCKS_PORT}
+  port: $socksPort
   address: '127.0.0.1'
   udp: 'udp'
 misc:
@@ -245,6 +265,39 @@ misc:
   log-file: stderr
   log-level: warn
 """.trimIndent()
+
+    // ── ByeDpi DPI-bypass proxy ───────────────────────────────
+    // jniStartProxy() blocks until the proxy exits — run in a daemon thread.
+    // jniStopProxy() calls shutdown(server_fd) to unblock it.
+
+    private fun startByeDpiProxy() {
+        if (!ByeDpiProxy.isAvailable) {
+            lastError = "libbyedpi.so недоступна — DPI-bypass невозможен"
+            Log.e(TAG, lastError)
+            throw IllegalStateException(lastError)
+        }
+        val proxy = ByeDpiProxy().also { byeDpiProxy = it }
+        byeDpiThread = Thread(null, {
+            val code = proxy.startProxy()
+            Log.i(TAG, "byedpi exited with code $code")
+        }, "byedpi-proxy").also {
+            it.isDaemon = true
+            it.start()
+        }
+        // Give byedpi a moment to bind its socket before hev connects to it
+        Thread.sleep(200)
+        Log.i(TAG, "byedpi DPI-bypass proxy started on :${ByeDpiProxy.PORT}")
+    }
+
+    private fun stopByeDpiProxy() {
+        byeDpiProxy?.let { proxy ->
+            runCatching { proxy.stopProxy() }
+            runCatching { proxy.jniForceClose() }
+        }
+        byeDpiThread?.join(1000)
+        byeDpiProxy = null
+        byeDpiThread = null
+    }
 
     // ── Xray via libv2ray (reflection) ────────────────────────
     //
